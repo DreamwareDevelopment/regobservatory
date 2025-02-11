@@ -6,11 +6,13 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "inngest": "inngest-cli dev --no-discovery --poll-interval 180 -u http://localhost:3000/api/inngest"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "inngest": "^3.31.7",
     "lucide-react": "^0.475.0",
     "next": "15.1.0",
     "react": "^18.3.1",
@@ -19,6 +21,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "inngest-cli": "^1.4.6",
     "@eslint/eslintrc": "^3",
     "@types/node": "^22",
     "@types/react": "^18",
