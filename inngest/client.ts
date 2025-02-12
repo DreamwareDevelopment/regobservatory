@@ -1,10 +1,11 @@
+import { CFRReference } from "@/lib/zod/agency";
 import { EventSchemas, GetEvents, Inngest } from "inngest";
 
 export enum InngestEvent {
   LoadAgencies = "agencies/load",
-  Ingest = "ingest/fetch",
+  Ingest = "ingest/agencies",
   IngestCron = "ingest/cron",
-  ProcessChunk = "ingest/chunk",
+  ProcessReference = "ingest/reference",
 }
 
 // Create a client to send and receive events
@@ -14,16 +15,23 @@ export const inngest = new Inngest({
     [InngestEvent.Ingest]: {
       data: {
         date?: string;
+        isCron?: boolean;
       };
     };
     [InngestEvent.IngestCron]: {
       data: {
         date: string;
+        isCron: true;
       };
     };
-    [InngestEvent.ProcessChunk]: {
+    [InngestEvent.ProcessReference]: {
       data: {
         date?: string;
+        reference: CFRReference;
+        referenceHash: string;
+        agencyId: string;
+        parentId: string | null;
+        isCron?: boolean;
       };
     };
     [InngestEvent.LoadAgencies]: {
