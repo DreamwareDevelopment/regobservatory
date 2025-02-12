@@ -1,0 +1,19 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("UNPOOLED_DATABASE_URL")
+  extensions = [vector]
+}
+
+model sample {
+  id String @id @default(uuid())
+  text String
+  embedding Unsupported("vector(1536)")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
