@@ -1,6 +1,7 @@
 import { EventSchemas, GetEvents, Inngest } from "inngest";
 
 export enum InngestEvent {
+  LoadAgencies = "agencies/load",
   Ingest = "ingest/fetch",
   IngestCron = "ingest/cron",
   ProcessChunk = "ingest/chunk",
@@ -24,6 +25,9 @@ export const inngest = new Inngest({
       data: {
         date?: string;
       };
+    };
+    [InngestEvent.LoadAgencies]: {
+      data: never;
     };
   }>(),
 });

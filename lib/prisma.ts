@@ -12,7 +12,11 @@ declare global {
   var prisma: PrismaClient | undefined
 }
 const connectionString = `${process.env.DATABASE_URL}`;
-const pool = new Pool({ connectionString });
+const pool = new Pool({
+  connectionString,
+  connectionTimeoutMillis: 30000,
+  idleTimeoutMillis: 10000,
+});
 const adapter = new PrismaNeon(pool);
 const prisma = global.prisma || new PrismaClient({ adapter });
 if (process.env.NODE_ENV === 'development') global.prisma = prisma;

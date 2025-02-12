@@ -17,3 +17,25 @@ model sample {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model Agency {
+  id            String  @id @default(uuid())
+  name          String
+  shortName     String? @map("short_name")
+  displayName   String  @map("display_name")
+  sortableName  String  @map("sortable_name")
+  slug          String  @unique
+
+  // CFR references as JSON
+  cfrReferences Json[] @map("cfr_references")
+
+  // Self-relation for parent/child hierarchy
+  parentId    String?  @map("parent_id")
+  parent      Agency?  @relation("AgencyHierarchy", fields: [parentId], references: [id])
+  children    Agency[] @relation("AgencyHierarchy")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("agencies")
+}
