@@ -6,4 +6,5 @@ import { loadAgencies } from "@/inngest/functions/agencies";
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [ingest, loadAgencies],
+  streaming: "allow",
 });
