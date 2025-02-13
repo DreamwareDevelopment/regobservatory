@@ -223,33 +223,45 @@ export const processReference = inngest.createFunction(
     });
 
     logger.info(`Found ${sections.length} sections on ${event.data.date} for reference: ${JSON.stringify(reference, null, 2)}`);
-    await step.run('process-sections', async () => {
-      for (const section of sections) {
-        const sectionId = `${section.title}.${section.identifier}`;
-        const content = await fetchSectionContent(logger, event.data.date, section);
-        const text = parseXMLText(content);
-        await prisma.$transaction(async (tx) => {
-          if (section.removed) {
-            await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, []);
-            if (!event.data.isCatchup && !event.data.isFirstCatchup) {
-              // We only have embeddings after the first catchup
-              await removeEmbeddings(tx as PrismaClient, logger, sectionId);
+
+    // Chunk the sections into arrays of 50
+    const chunkSize = 50;
+    const sectionChunks = [];
+    for (let i = 0; i < sections.length; i += chunkSize) {
+      sectionChunks.push(sections.slice(i, i + chunkSize));
+    }
+
+    // Process each chunk in a separate step so the serverless function doesn't timeout
+    for (const sectionChunk of sectionChunks) {
+      await step.run('process-sections', async () => {
+        for (const section of sectionChunk) {
+          const sectionId = `${section.title}.${section.identifier}`;
+          const content = await fetchSectionContent(logger, event.data.date, section);
+          const text = parseXMLText(content);
+          await prisma.$transaction(async (tx) => {
+            if (section.removed) {
+              await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, []);
+              if (!event.data.isCatchup && !event.data.isFirstCatchup) {
+                // We only have embeddings after the first catchup
+                await removeEmbeddings(tx as PrismaClient, logger, sectionId);
+              }
+              return;
             }
-            return;
+            logger.info(`Fetched content for section ${section.identifier}`);
+            await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, text);
+          });
+          if (!event.data.isCatchup && !event.data.isFirstCatchup) {
+            // We only have embeddings after the first catchup
+            await upsertEmbeddings(logger, sectionId, text);
           }
-          logger.info(`Fetched content for section ${section.identifier}`);
-          await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, text);
-        });
-        if (!event.data.isCatchup && !event.data.isFirstCatchup) {
-          // We only have embeddings after the first catchup
-          await upsertEmbeddings(logger, sectionId, text);
         }
-      }
-      if (event.data.isFirstCatchup) {
-        // Initialize embeddings for the agency
-        await initEmbeddings(logger, event.data.agencyId);
-      }
-    });
+        if (event.data.isFirstCatchup) {
+          // Initialize embeddings for the agency
+          await initEmbeddings(logger, event.data.agencyId);
+        }
+      });
+    }
+
     if (event.data.triggerFollowUp) {
       await step.run('update-application-state', async () => {
         const lastProcessed = dayjs(event.data.date);
