@@ -85,9 +85,11 @@ export const loadAgencies = inngest.createFunction(
         where: { id: APPLICATION_STATE_ID },
         create: {
           id: APPLICATION_STATE_ID,
+          runUntil: process.env.RUN_UNTIL ?? null,
         },
         update: {
           id: APPLICATION_STATE_ID,
+          runUntil: process.env.RUN_UNTIL ?? null,
         },
       });
       logger.info("Successfully saved application state to database");
