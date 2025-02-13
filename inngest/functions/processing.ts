@@ -50,13 +50,19 @@ async function fetchReferenceContent(logger: Logger, date: string, reference: CF
   return await response.text();
 }
 
-function countWords(content: string) {
-  return content.split(/\s+/).filter(Boolean).length;
+function countWords(logger: Logger, content: string) {
+  if (typeof content !== 'string') {
+    logger.error(`Content is not a string: ${JSON.stringify(content)}`);
+    return 0; // Return 0 if content is not a string
+  }
+  // Use a regular expression to match words with at least 3 alphabetic characters
+  const words = content.match(/\b[a-zA-Z]{3,}\b/g);
+  return words ? words.length : 0;
 }
 
-function diffWordCount(previousContent: string[], currentContent: string[]) {
-  const previousWordCount = previousContent.reduce((acc, content) => acc + countWords(content), 0);
-  const currentWordCount = currentContent.reduce((acc, content) => acc + countWords(content), 0);
+function diffWordCount(logger: Logger, previousContent: string[], currentContent: string[]) {
+  const previousWordCount = previousContent.reduce((acc, content) => acc + countWords(logger, content), 0);
+  const currentWordCount = currentContent.reduce((acc, content) => acc + countWords(logger, content), 0);
   return currentWordCount - previousWordCount;
 }
 
@@ -105,12 +111,12 @@ async function updateHistory(
   // Then get the current stored agency content if any
   const storedAgencyContent = await tx.agencyContent.findUnique({
     where: {
-      id: agencyId,
+      agencyId,
     },
   });
   const storedContent = ParsedXMLTextArraySchema.parse(storedAgencyContent?.content ?? []);
   // Then diff and add/remove the diffed word count to/from the current history entry
-  const wordCountDiff = diffWordCount(storedContent.map(c => c.text), newContent.map(c => c.text));
+  const wordCountDiff = diffWordCount(logger, storedContent.map(c => c.text), newContent.map(c => c.text));
   currentHistory.wordCount += wordCountDiff;
   await tx.agencyHistory.update({
     where: { id: currentHistory.id },
@@ -175,7 +181,7 @@ async function initEmbeddings(logger: Logger, agencyId: string, title: number) {
   logger.info(`Initializing embeddings for agency ${agencyId}`);
   const content = await prisma.agencyContent.findUnique({
     where: {
-      id: agencyId,
+      agencyId,
     },
   });
   if (!content) {
@@ -220,12 +226,12 @@ export const processReference = inngest.createFunction(
     concurrency: [{
       limit: 10,
       scope: "fn",
-      key: `event.data.date`, // Only 10 references per date can be processed at a time
+      key: "event.data.date", // Only 10 references per date can be processed at a time
     }, {
       limit: 1,
       scope: "fn",
       // Only one unique reference can be processed at a time, this is for multiple agencies with the same reference
-      key: `event.data.referenceHash`,
+      key: "event.data.referenceHash",
     }],
     retries: 0,
   },

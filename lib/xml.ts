@@ -11,13 +11,6 @@ export function parseXMLText(xmlData: string, logger: Logger): ParsedXMLTextArra
     // Extract type and identifier if they exist
     const currentIdentifier = div.$?.N ?? identifier;
     const currentType = div.$?.TYPE ?? type;
-
-    // Extract HEAD text if it exists
-    const headText = div.HEAD ? div.HEAD[0] : '';
-    if (headText) {
-      text.push({ type: currentType, identifier: currentIdentifier, text: headText });
-    }
-
     // Extract paragraphs if they exist
     if (div.P) {
       // logger.info(`Paragraphs: ${div.P.toString()}`);
