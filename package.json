@@ -22,6 +22,7 @@
     "ai": "^4.1.36",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "d3": "^7.9.0",
     "dayjs": "^1.11.13",
     "inngest": "^3.31.7",
     "lucide-react": "^0.475.0",
@@ -39,6 +40,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@types/d3": "^7.4.3",
     "@types/md5": "^2.3.5",
     "@types/node": "^22",
     "@types/react": "^18",

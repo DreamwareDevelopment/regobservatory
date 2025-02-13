@@ -1,5 +1,6 @@
 import Image from "next/image";
 import AgencyHistoryChart from "./components/agency-history-chart";
+import BubbleChart from "./components/bubble-chart";
 
 export default function Home() {
   return (
@@ -7,6 +8,7 @@ export default function Home() {
       <main className="container mx-auto p-4 flex flex-col gap-4 items-center">
         <h1 className="text-2xl font-bold mb-4">Agency History Dashboard</h1>
         <AgencyHistoryChart />
+        <BubbleChart />
       </main>
       <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
         <a
