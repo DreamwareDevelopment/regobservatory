@@ -2,7 +2,7 @@ import { inngest, InngestEvent } from "../client";
 import { parseXMLText } from "@/lib/xml";
 import { CFRReference } from "@/lib/zod/agency";
 import { ContentVersion, VersionResponseSchema } from "@/lib/zod/data";
-import dayjs from "dayjs";
+import dayjs from "@/lib/dayjs";
 import { ingest } from "./ingest";
 import { APPLICATION_STATE_ID } from "./agencies";
 import prisma from "@/lib/prisma";
@@ -10,9 +10,9 @@ import { PrismaClient } from "@prisma/client";
 import { embedTexts, generateChunks } from "@/lib/ai";
 import { Logger } from "inngest/middleware/logger";
 
-async function fetchReferenceSections(reference: CFRReference, date: string) {
+async function fetchReferenceSections(logger: Logger, reference: CFRReference, date: string) {
   const params = new URLSearchParams({
-    issue_date: date
+    'issue_date[on]': date
   });
 
   // Add all possible reference filters if they exist
@@ -35,27 +35,27 @@ async function fetchReferenceSections(reference: CFRReference, date: string) {
     params.append('appendix', reference.appendix);
   }
 
-  const response = await fetch(
-    `https://www.ecfr.gov/api/versioner/v1/versions/title-${reference.title}.json?${params.toString()}`
-  );
-  
+  const url = `https://www.ecfr.gov/api/versioner/v1/versions/title-${reference.title}.json?${params.toString()}`;
+  logger.info(url);
+  const response = await fetch(url);
+
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
-  
+
   const data = await response.json();
   return VersionResponseSchema.parse(data);
 }
 
-async function fetchSectionContent(date: string, section: ContentVersion) {
+async function fetchSectionContent(logger: Logger, date: string, section: ContentVersion) {
   const [part,] = section.identifier.split('.');
   const params = new URLSearchParams({
     part,
     section: section.identifier,
   });
-  const response = await fetch(
-    `https://www.ecfr.gov/api/versioner/v1/full/${date}/title-${section.title}.xml?${params.toString()}`
-  );
+  const url = `https://www.ecfr.gov/api/versioner/v1/full/${date}/title-${section.title}.xml?${params.toString()}`;
+  logger.info(url);
+  const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
@@ -74,35 +74,40 @@ function diffWordCount(previousContent: string[], currentContent: string[]) {
   return currentWordCount - previousWordCount;
 }
 
-async function updateSectionHistory(tx: PrismaClient, dateString: string, agencyId: string, section: ContentVersion, newContent: string[]) {
+async function updateSectionHistory(tx: PrismaClient, logger: Logger, dateString: string, agencyId: string, section: ContentVersion, newContent: string[]) {
   const date = dayjs(dateString);
   // Get the previous history entry for the agency
   const previousHistory = await tx.agencyHistory.findFirst({
     where: {
       agencyId,
-      createdAt: {
-        lte: date.hour(0).minute(0).second(0).toDate(),
+      date: {
+        lte: date.toDate(),
       },
     },
     orderBy: {
-      createdAt: 'desc',
+      date: 'desc',
     },
   });
+  logger.info(`Previous history: ${previousHistory?.wordCount}`);
   let currentHistory = await tx.agencyHistory.findFirst({
     where: {
       agencyId,
-      createdAt: {
-        gte: date.hour(0).minute(0).second(0).toDate(),
+      date: {
+        gte: date.toDate(),
       },
     },
     orderBy: {
-      createdAt: 'desc',
+      date: 'desc',
     },
   });
   if (!currentHistory) {
     // Create a new history entry for the agency
     currentHistory = await tx.agencyHistory.create({
-      data: { agencyId, wordCount: previousHistory?.wordCount ?? 0 },
+      data: {
+        agencyId,
+        wordCount: previousHistory?.wordCount ?? 0,
+        date: date.hour(12).toDate(),
+      },
     });
   }
   // Then get the current stored section if any
@@ -132,7 +137,7 @@ async function updateSectionHistory(tx: PrismaClient, dateString: string, agency
       },
       create: {
         id: sectionId,
-        title: section.title,
+        title: parseInt(section.title),
         part: section.part,
         identifier: section.identifier,
         content: newContent,
@@ -157,7 +162,7 @@ async function removeEmbeddings(tx: PrismaClient, logger: Logger, sectionId: str
   logger.info(`Removed embeddings for section ${sectionId}`);
 }
 
-async function upsertEmbeddings(tx: PrismaClient, logger: Logger, sectionId: string, newContent: string[]) {
+async function upsertEmbeddings(logger: Logger, sectionId: string, newContent: string[]) {
   // Upsert embeddings for the section
   const chunks = newContent.flatMap(content => generateChunks(content));
   logger.info(`Generating ${chunks.length} embeddings for section ${sectionId}`);
@@ -167,15 +172,15 @@ async function upsertEmbeddings(tx: PrismaClient, logger: Logger, sectionId: str
   for (let i = 0; i < chunks.length; i++) {
     const embedding = embeddings[i];
     const chunk = chunks[i];
-    promises.push(tx.$executeRaw`INSERT INTO "section_embeddings" ("sectionId", "text", "embedding") VALUES (${sectionId}, ${chunk}, ${embedding})`);
+    promises.push(prisma.$executeRaw`INSERT INTO "section_embeddings" ("sectionId", "text", "embedding") VALUES (${sectionId}, ${chunk}, ${embedding})`);
   }
   await Promise.all(promises);
 }
 
-async function initEmbeddings(tx: PrismaClient, logger: Logger, agencyId: string) {
+async function initEmbeddings(logger: Logger, agencyId: string) {
   // Initialize embeddings for the agency
   logger.info(`Initializing embeddings for agency ${agencyId}`);
-  const sections = await tx.section.findMany({
+  const sections = await prisma.section.findMany({
     where: {
       agencies: {
         some: { agencyId },
@@ -185,7 +190,7 @@ async function initEmbeddings(tx: PrismaClient, logger: Logger, agencyId: string
   logger.info(`Found ${sections.length} sections for agency ${agencyId}, initializing embeddings...`);
   const promises = [];
   for (const storedSection of sections) {
-    promises.push(upsertEmbeddings(tx as PrismaClient, logger, storedSection.id, storedSection.content));
+    promises.push(upsertEmbeddings(logger, storedSection.id, storedSection.content));
   }
   await Promise.all(promises);
   logger.info(`Initialized embeddings for agency ${agencyId}`);
@@ -204,6 +209,7 @@ export const processReference = inngest.createFunction(
       // Only one unique reference can be processed at a time, this is for multiple agencies with the same reference
       key: `event.data.referenceHash`,
     }],
+    retries: 0,
   },
   { event: InngestEvent.ProcessReference },
   async ({ event, logger, step }) => {
@@ -211,38 +217,38 @@ export const processReference = inngest.createFunction(
     const reference = event.data.reference as CFRReference;
 
     const sections = await step.run('fetch-title-versions', async () => {
-      const result = await fetchReferenceSections(reference, event.data.date);
+      const result = await fetchReferenceSections(logger, reference, event.data.date);
       // TODO: Fix appendices not working
       return result.content_versions.filter(v => v.type === 'section'); // Filter out appendices because the xml search doesn't work for them
     });
 
     logger.info(`Found ${sections.length} sections on ${event.data.date} for reference: ${JSON.stringify(reference, null, 2)}`);
     await step.run('process-sections', async () => {
-      await prisma.$transaction(async (tx) => {
-        for (const section of sections) {
-          const sectionId = `${section.title}.${section.identifier}`;
+      for (const section of sections) {
+        const sectionId = `${section.title}.${section.identifier}`;
+        const content = await fetchSectionContent(logger, event.data.date, section);
+        const text = parseXMLText(content);
+        await prisma.$transaction(async (tx) => {
           if (section.removed) {
-            await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, []);
+            await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, []);
             if (!event.data.isCatchup && !event.data.isFirstCatchup) {
               // We only have embeddings after the first catchup
               await removeEmbeddings(tx as PrismaClient, logger, sectionId);
             }
-            continue;
+            return;
           }
-          const content = await fetchSectionContent(event.data.date, section);
-          const text = parseXMLText(content);
           logger.info(`Fetched content for section ${section.identifier}`);
-          await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, text);
-          if (!event.data.isCatchup && !event.data.isFirstCatchup) {
-            // We only have embeddings after the first catchup
-            await upsertEmbeddings(tx as PrismaClient, logger, sectionId, text);
-          }
+          await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, text);
+        });
+        if (!event.data.isCatchup && !event.data.isFirstCatchup) {
+          // We only have embeddings after the first catchup
+          await upsertEmbeddings(logger, sectionId, text);
         }
-        if (event.data.isFirstCatchup) {
-          // Initialize embeddings for the agency
-          await initEmbeddings(tx as PrismaClient, logger, event.data.agencyId);
-        }
-      });
+      }
+      if (event.data.isFirstCatchup) {
+        // Initialize embeddings for the agency
+        await initEmbeddings(logger, event.data.agencyId);
+      }
     });
     if (event.data.triggerFollowUp) {
       await step.run('update-application-state', async () => {
@@ -267,6 +273,6 @@ export const processReference = inngest.createFunction(
         },
       });
     }
-    return { sections };
+    return { sections, date: event.data.date };
   }
 );

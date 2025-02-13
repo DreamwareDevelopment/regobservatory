@@ -18,6 +18,11 @@ const pool = new Pool({
   idleTimeoutMillis: 10000,
 });
 const adapter = new PrismaNeon(pool);
-const prisma = global.prisma || new PrismaClient({ adapter });
+const prisma = global.prisma || new PrismaClient({
+  adapter,
+  transactionOptions: {
+    timeout: 30000,
+  },
+});
 if (process.env.NODE_ENV === 'development') global.prisma = prisma;
 export default prisma;

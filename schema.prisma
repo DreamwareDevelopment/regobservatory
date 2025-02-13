@@ -85,6 +85,7 @@ model AgencyHistory {
   agencyId  String
   agency    Agency   @relation(fields: [agencyId], references: [id])
   wordCount Int
+  date      DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

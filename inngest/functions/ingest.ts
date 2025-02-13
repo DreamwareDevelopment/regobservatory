@@ -4,7 +4,7 @@ import { processReference } from "./processing";
 import prisma from "@/lib/prisma";
 import md5 from "md5";
 import { CFRReference } from "@/lib/zod/agency";
-import dayjs from "dayjs";
+import dayjs from "@/lib/dayjs";
 
 export const ingest = inngest.createFunction(
   {
