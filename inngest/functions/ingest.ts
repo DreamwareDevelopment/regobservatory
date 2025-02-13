@@ -140,6 +140,11 @@ export const ingestCron = inngest.createFunction(
     }
     const date = dayjs()
     const dateString = date.format("YYYY-MM-DD");
+    if (dateString !== applicationState.nextProcessingDate) {
+      // Likely behind schedule, log an error and skip
+      logger.error(`Cron job running for ${dateString} but next processing date is ${applicationState.nextProcessingDate}`);
+      return;
+    }
     logger.info(`Cron job running for ${dateString}`);
     await step.invoke(InngestEvent.IngestCron, {
       function: ingest,
