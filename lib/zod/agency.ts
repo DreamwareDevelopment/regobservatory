@@ -13,11 +13,11 @@ const CFRReferenceSchema = z.object({
 
 const BaseAgencySchema = z.object({
   name: z.string(),
-  short_name: z.string().nullable(),
-  display_name: z.string(),
-  sortable_name: z.string(),
+  shortName: z.string().nullable(),
+  displayName: z.string(),
+  sortableName: z.string(),
   slug: z.string(),
-  cfr_references: z.array(CFRReferenceSchema),
+  cfrReferences: z.array(CFRReferenceSchema),
 });
 
 const AgencySchema = BaseAgencySchema;

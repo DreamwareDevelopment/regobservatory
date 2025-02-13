@@ -18,6 +18,15 @@ model sample {
   updatedAt DateTime @updatedAt
 }
 
+model ApplicationState {
+  id                 String  @id
+  nextProcessingDate String? @map("next_processing_date")
+  runUntil           String? @map("run_until") // Development field to have reduced record fetching/processing
+  isCaughtUp         Boolean @default(false) @map("is_caught_up")
+
+  @@map("application_state")
+}
+
 model Agency {
   id            String  @id @default(uuid())
   name          String

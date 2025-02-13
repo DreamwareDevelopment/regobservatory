@@ -1,6 +1,10 @@
 import { inngest, InngestEvent } from "../client";
 import { CFRReference } from "@/lib/zod/agency";
 import { ContentVersion, VersionResponseSchema } from "@/lib/zod/data";
+import dayjs from "dayjs";
+import { ingest } from "./ingest";
+import { APPLICATION_STATE_ID } from "./agencies";
+import prisma from "@/lib/prisma";
 
 async function fetchReferenceSections(reference: CFRReference, date: string) {
   const params = new URLSearchParams({
@@ -72,53 +76,82 @@ async function upsertEmbeddings(parentId: string | null, agencyId: string, secti
   // Upsert embeddings for the section and agency
 }
 
+async function initEmbeddings(parentId: string | null, agencyId: string) {
+  // Initialize embeddings for the agency
+}
+
 export const processReference = inngest.createFunction(
   {
     id: "process-reference",
     concurrency: [{
-      limit: 5,
-      scope: "account",
-      key: `event.data.agencyId`,
+      limit: 10,
+      scope: "fn",
+      key: `event.data.date`, // Only 10 references per date can be processed at a time
     }, {
       limit: 1,
-      scope: "account",
+      scope: "fn",
+      // Only one unique reference can be processed at a time, this is for multiple agencies with the same reference
       key: `event.data.referenceHash`,
     }],
   },
   { event: InngestEvent.ProcessReference },
   async ({ event, logger, step }) => {
-    logger.info(`Processing reference ${event.data.reference}`);
+    logger.info(`Processing reference: ${JSON.stringify(event.data.reference, null, 2)}`);
     const reference = event.data.reference as CFRReference;
-    const date = event.data.date || '2017-01-01'; // Beginning of CFR data
-    
+
     const sections = await step.run('fetch-title-versions', async () => {
-      const result = await fetchReferenceSections(reference, date);
+      const result = await fetchReferenceSections(reference, event.data.date);
+      // TODO: Fix appendices not working
       return result.content_versions.filter(v => v.type === 'section'); // Filter out appendices because the xml search doesn't work for them
     });
 
-    logger.info(`Found ${sections.length} sections on ${date} for reference ${JSON.stringify(reference, null, 2)}`);
+    logger.info(`Found ${sections.length} sections on ${event.data.date} for reference: ${JSON.stringify(reference, null, 2)}`);
     await step.run('process-sections', async () => {
       for (const section of sections) {
         if (section.removed) {
           await updateSectionHistory(event.data.parentId, event.data.agencyId, section, '');
-          if (event.data.isCron) {
-            // We only have embeddings during cron runs
-            // TODO: Update stored application state when we've gotten up to date with historical data
+          if (!event.data.isCatchup && !event.data.isFirstCatchup) {
+            // We only have embeddings after the first catchup
             await removeEmbeddings(section);
           }
           continue;
         }
-        const content = await fetchSectionContent(date, section);
+        const content = await fetchSectionContent(event.data.date, section);
         logger.info(`Fetched content for section ${section.identifier}`);
         await updateSectionHistory(event.data.parentId, event.data.agencyId, section, content);
-        if (event.data.isCron) {
-          // We only have embeddings during cron runs
-          // TODO: Update stored application state when we've gotten up to date with historical data
-          await upsertEmbeddings(event.data.parentId, event.data. agencyId, section, content);
+        if (!event.data.isCatchup && !event.data.isFirstCatchup) {
+          // We only have embeddings after the first catchup
+          await upsertEmbeddings(event.data.parentId, event.data.agencyId, section, content);
         }
       }
+      if (event.data.isFirstCatchup) {
+        // Initialize embeddings for the agency
+        await initEmbeddings(event.data.parentId, event.data.agencyId);
+      }
     });
-    // TODO: Re-invoke this function with the next date
+    if (event.data.triggerFollowUp) {
+      await step.run('update-application-state', async () => {
+        const lastProcessed = dayjs(event.data.date);
+        logger.info(`Last processed: ${lastProcessed.format('YYYY-MM-DD HH:mm:ss')}`);
+        await prisma.applicationState.update({
+          where: { id: APPLICATION_STATE_ID },
+          data: {
+            nextProcessingDate: lastProcessed.add(1, 'day').format('YYYY-MM-DD'),
+            isCaughtUp: !event.data.isCatchup,
+          },
+        });
+      });
+    }
+    // This is only done on the last reference of the last agency for a given date as it re-runs ingest for all agencies on the next date.
+    if (event.data.isCatchup && event.data.triggerFollowUp) {
+      await step.invoke(`catchup-continue`, {
+        function: ingest,
+        data: {
+          ...event.data,
+          date: dayjs(event.data.date).add(1, 'day').format('YYYY-MM-DD'),
+        },
+      });
+    }
     return { sections };
   }
 );

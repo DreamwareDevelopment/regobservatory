@@ -2,6 +2,8 @@ import { inngest, InngestEvent } from "../client";
 import prisma from "@/lib/prisma";
 import { agencySchemas } from "@/lib/zod/agency";
 
+export const APPLICATION_STATE_ID = "application-state";
+
 export const loadAgencies = inngest.createFunction(
   {
     id: "load-agencies",
@@ -39,18 +41,18 @@ export const loadAgencies = inngest.createFunction(
           where: { slug: dept.slug },
           create: {
             name: dept.name,
-            shortName: dept.short_name,
-            displayName: dept.display_name,
-            sortableName: dept.sortable_name,
+            shortName: dept.shortName,
+            displayName: dept.displayName,
+            sortableName: dept.sortableName,
             slug: dept.slug,
-            cfrReferences: dept.cfr_references,
+            cfrReferences: dept.cfrReferences,
           },
           update: {
             name: dept.name,
-            shortName: dept.short_name,
-            displayName: dept.display_name,
-            sortableName: dept.sortable_name,
-            cfrReferences: dept.cfr_references,
+            shortName: dept.shortName,
+            displayName: dept.displayName,
+            sortableName: dept.sortableName,
+            cfrReferences: dept.cfrReferences,
           },
         });
 
@@ -60,25 +62,35 @@ export const loadAgencies = inngest.createFunction(
             where: { slug: agency.slug },
             create: {
               name: agency.name,
-              shortName: agency.short_name,
-              displayName: agency.display_name,
-              sortableName: agency.sortable_name,
+              shortName: agency.shortName,
+              displayName: agency.displayName,
+              sortableName: agency.sortableName,
               slug: agency.slug,
-              cfrReferences: agency.cfr_references,
+              cfrReferences: agency.cfrReferences,
               parentId: department.id,
             },
             update: {
               name: agency.name,
-              shortName: agency.short_name,
-              displayName: agency.display_name,
-              sortableName: agency.sortable_name,
-              cfrReferences: agency.cfr_references,
+              shortName: agency.shortName,
+              displayName: agency.displayName,
+              sortableName: agency.sortableName,
+              cfrReferences: agency.cfrReferences,
               parentId: department.id,
             },
           });
         }
       }
       logger.info("Successfully saved agencies to database");
+      await prisma.applicationState.upsert({
+        where: { id: APPLICATION_STATE_ID },
+        create: {
+          id: APPLICATION_STATE_ID,
+        },
+        update: {
+          id: APPLICATION_STATE_ID,
+        },
+      });
+      logger.info("Successfully saved application state to database");
     });
 
     return { agencies };

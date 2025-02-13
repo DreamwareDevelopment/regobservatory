@@ -4,6 +4,7 @@ import { processReference } from "./processing";
 import prisma from "@/lib/prisma";
 import md5 from "md5";
 import { CFRReference } from "@/lib/zod/agency";
+import dayjs from "dayjs";
 
 export const ingest = inngest.createFunction(
   {
@@ -17,8 +18,11 @@ export const ingest = inngest.createFunction(
   },
   { event: InngestEvent.Ingest },
   async ({ event, logger, step }) => {
-    logger.info(`Ingesting from ${event.data.date}`);
-    const agencies = await step.run("ingest-agencies", async () => {
+    const { agencies, applicationState } = await step.run("ingest-agencies", async () => {
+      const applicationState = await prisma.applicationState.findFirst();
+      if (!applicationState) {
+        throw new Error("Application state not found");
+      }
       const agenciesToIngest: Agency[] = [];
       const agencies = await prisma.agency.findMany({
         include: {
@@ -41,21 +45,44 @@ export const ingest = inngest.createFunction(
           break;
         }
       }
-      return agenciesToIngest;
+      return { agencies: agenciesToIngest, applicationState };
     });
     logger.info(`Found ${agencies.length} agencies`);
-    for (const agency of agencies) {
-      for (const reference of (agency.cfrReferences as CFRReference[]) ?? []) {
+    /*
+    If we have a date, use that. We're either running a cron job or a continuation of catchup.
+    If we have a next processing date, it means we've restarted the app during catchup, perhaps after a crash.
+    If we don't have a date, we're in the first catchup run and should use the beginning of the CFR data.
+    */
+    const date = event.data.date || applicationState.nextProcessingDate || '2017-01-01';
+    // runUntil is a development field to have reduced record fetching/processing during development
+    const isToday = date === (applicationState.runUntil || dayjs().format('YYYY-MM-DD'));
+    let isFirstCatchup = false;
+    if (!applicationState.isCaughtUp && isToday) {
+      isFirstCatchup = true;
+      applicationState.isCaughtUp = true;
+    }
+    logger.info(`Ingesting from ${date}, isCaughtUp: ${applicationState.isCaughtUp}`);
+
+    // Ingest each agency
+    for (let i = 0; i < agencies.length; i++) {
+      const agency = agencies[i];
+      // Ingest each reference for the agency
+      for (let j = 0; j < agency.cfrReferences.length; j++) {
+        const reference = agency.cfrReferences[j] as CFRReference;
         const hash = md5(JSON.stringify(reference));
+        // TODO: Parallelize this
         await step.invoke(`process-${agency.id}-${hash}`, {
           function: processReference,
           data: {
-            date: event.data.date,
-            isCron: event.data.isCron,
+            date,
+            isCatchup: !applicationState.isCaughtUp,
+            isFirstCatchup,
             reference,
             referenceHash: hash,
             agencyId: agency.id,
             parentId: agency.parentId,
+            // Only trigger follow up actions once for this function
+            triggerFollowUp: i === agencies.length - 1 && j === agency.cfrReferences.length - 1,
           },
         });
       }
@@ -66,4 +93,37 @@ export const ingest = inngest.createFunction(
   },
 );
 
-// TODO: Add a cron job that runs every day but checks if the history is up to date before running the ingest
+export const ingestCron = inngest.createFunction(
+  {
+    id: "ingest-cron",
+    concurrency: {
+      limit: 1,
+      scope: "account",
+      key: "ingest-cron",
+    },
+    retries: 1,
+  },
+  {
+    cron: "0 19 * * 1-5", // 7:00 PM EST Monday through Friday
+  },
+  async ({ logger, step }) => {
+    const applicationState = await prisma.applicationState.findFirst();
+    if (!applicationState) {
+      throw new Error("Application state not found");
+    }
+    if (!applicationState.isCaughtUp) {
+      // Cron only runs with today's date so skip if we're not caught up
+      logger.info("Application state is not caught up, skipping cron job");
+      return;
+    }
+    const date = dayjs()
+    const dateString = date.format("YYYY-MM-DD");
+    logger.info(`Cron job running for ${dateString}`);
+    await step.invoke(InngestEvent.IngestCron, {
+      function: ingest,
+      data: {
+        date: dateString,
+      },
+    });
+  }
+);

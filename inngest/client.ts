@@ -15,23 +15,23 @@ export const inngest = new Inngest({
     [InngestEvent.Ingest]: {
       data: {
         date?: string;
-        isCron?: boolean;
       };
     };
     [InngestEvent.IngestCron]: {
       data: {
         date: string;
-        isCron: true;
       };
     };
     [InngestEvent.ProcessReference]: {
       data: {
-        date?: string;
+        date: string;
         reference: CFRReference;
         referenceHash: string;
         agencyId: string;
         parentId: string | null;
-        isCron?: boolean;
+        isCatchup: boolean;
+        isFirstCatchup: boolean;
+        triggerFollowUp: boolean;
       };
     };
     [InngestEvent.LoadAgencies]: {
