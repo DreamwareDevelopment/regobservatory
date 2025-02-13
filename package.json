@@ -14,9 +14,11 @@
     "reset:db": "neon branches reset dev/zander"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^1.1.10",
     "@neondatabase/serverless": "^0.10.4",
     "@prisma/adapter-neon": "^6.3.1",
     "@prisma/client": "^6.3.1",
+    "ai": "^4.1.36",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dayjs": "^1.11.13",
@@ -30,6 +32,7 @@
     "tailwind-merge": "^3.0.1",
     "tailwindcss-animate": "^1.0.7",
     "ws": "^8.18.0",
+    "xml2js": "^0.6.2",
     "zod": "^3.24.2"
   },
   "devDependencies": {
@@ -39,6 +42,7 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/ws": "^8.5.14",
+    "@types/xml2js": "^0.4.14",
     "bufferutil": "^4.0.9",
     "dotenv-cli": "^8.0.0",
     "eslint": "^9",

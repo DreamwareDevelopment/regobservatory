@@ -10,14 +10,6 @@ datasource db {
   extensions = [vector]
 }
 
-model sample {
-  id String @id @default(uuid())
-  text String
-  embedding Unsupported("vector(1536)")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 model ApplicationState {
   id                 String  @id
   nextProcessingDate String? @map("next_processing_date")
@@ -36,15 +28,65 @@ model Agency {
   slug          String  @unique
 
   // CFR references as JSON
-  cfrReferences Json[] @map("cfr_references")
+  cfrReferences Json[]  @map("cfr_references")
 
   // Self-relation for parent/child hierarchy
-  parentId    String?  @map("parent_id")
-  parent      Agency?  @relation("AgencyHierarchy", fields: [parentId], references: [id])
-  children    Agency[] @relation("AgencyHierarchy")
+  parentId    String?   @map("parent_id")
+  parent      Agency?   @relation("AgencyHierarchy", fields: [parentId], references: [id])
+  children    Agency[]  @relation("AgencyHierarchy")
 
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  sections    AgencySections[]
+  history     AgencyHistory[]
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   @@map("agencies")
+}
+
+model Section {
+  id         String   @id // `${title}.${identifier}`
+  title      Int
+  part       String
+  identifier String
+  content    String[]   // TODO: This should be put in blob storage
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  agencies   AgencySections[]
+  embeddings SectionEmbedding[]
+
+  @@map("sections")
+}
+
+model SectionEmbedding {
+  id        String  @id @default(uuid())
+  sectionId String
+  section   Section @relation(fields: [sectionId], references: [id])
+  text      String
+  embedding Unsupported("vector(1536)")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("section_embeddings")
+}
+
+model AgencySections {
+  sectionId String
+  agencyId  String
+  section   Section @relation(fields: [sectionId], references: [id])
+  agency    Agency  @relation(fields: [agencyId], references: [id])
+
+  @@id([agencyId, sectionId])
+  @@map("agency_sections")
+}
+
+model AgencyHistory {
+  id        String   @id @default(uuid())
+  agencyId  String
+  agency    Agency   @relation(fields: [agencyId], references: [id])
+  wordCount Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("agency_history")
 }

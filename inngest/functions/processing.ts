@@ -1,4 +1,5 @@
 import { inngest, InngestEvent } from "../client";
+import { parseXMLText } from "@/lib/xml";
 import { CFRReference } from "@/lib/zod/agency";
 import { ContentVersion, VersionResponseSchema } from "@/lib/zod/data";
 import dayjs from "dayjs";
@@ -6,6 +7,8 @@ import { ingest } from "./ingest";
 import { APPLICATION_STATE_ID } from "./agencies";
 import prisma from "@/lib/prisma";
 import { PrismaClient } from "@prisma/client";
+import { embedTexts, generateChunks } from "@/lib/ai";
+import { Logger } from "inngest/middleware/logger";
 
 async function fetchReferenceSections(reference: CFRReference, date: string) {
   const params = new URLSearchParams({
@@ -65,13 +68,13 @@ function countWords(content: string) {
   return content.split(/\s+/).filter(Boolean).length;
 }
 
-function diffWordCount(previousContent: string, currentContent: string) {
-  const previousWordCount = countWords(previousContent);
-  const currentWordCount = countWords(currentContent);
+function diffWordCount(previousContent: string[], currentContent: string[]) {
+  const previousWordCount = previousContent.reduce((acc, content) => acc + countWords(content), 0);
+  const currentWordCount = currentContent.reduce((acc, content) => acc + countWords(content), 0);
   return currentWordCount - previousWordCount;
 }
 
-async function updateSectionHistory(tx: PrismaClient, dateString: string, agencyId: string, section: ContentVersion, newContent: string) {
+async function updateSectionHistory(tx: PrismaClient, dateString: string, agencyId: string, section: ContentVersion, newContent: string[]) {
   const date = dayjs(dateString);
   // Get the previous history entry for the agency
   const previousHistory = await tx.agencyHistory.findFirst({
@@ -110,7 +113,7 @@ async function updateSectionHistory(tx: PrismaClient, dateString: string, agency
     }
   });
   // Then diff and add/remove the diffed word count to/from the current history entry
-  const wordCountDiff = diffWordCount(storedSection?.content ?? '', newContent);
+  const wordCountDiff = diffWordCount(storedSection?.content ?? [], newContent);
   currentHistory.wordCount += wordCountDiff;
   await tx.agencyHistory.update({
     where: { id: currentHistory.id },
@@ -143,16 +146,49 @@ async function updateSectionHistory(tx: PrismaClient, dateString: string, agency
   }
 }
 
-async function removeEmbeddings(tx: PrismaClient, section: ContentVersion) {
+async function removeEmbeddings(tx: PrismaClient, logger: Logger, sectionId: string) {
   // Remove the embeddings for the section and all agencies
+  logger.info(`Removing embeddings for section ${sectionId}`);
+  await tx.sectionEmbedding.deleteMany({
+    where: {
+      sectionId,
+    },
+  });
+  logger.info(`Removed embeddings for section ${sectionId}`);
 }
 
-async function upsertEmbeddings(tx: PrismaClient, parentId: string | null, agencyId: string, section: ContentVersion, newContent: string) {
-  // Upsert embeddings for the section and agency
+async function upsertEmbeddings(tx: PrismaClient, logger: Logger, sectionId: string, newContent: string[]) {
+  // Upsert embeddings for the section
+  const chunks = newContent.flatMap(content => generateChunks(content));
+  logger.info(`Generating ${chunks.length} embeddings for section ${sectionId}`);
+  const { embeddings } = await embedTexts(chunks);
+  logger.info(`Upserting ${embeddings.length} embeddings for section ${sectionId}`);
+  const promises = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const embedding = embeddings[i];
+    const chunk = chunks[i];
+    promises.push(tx.$executeRaw`INSERT INTO "section_embeddings" ("sectionId", "text", "embedding") VALUES (${sectionId}, ${chunk}, ${embedding})`);
+  }
+  await Promise.all(promises);
 }
 
-async function initEmbeddings(tx: PrismaClient, parentId: string | null, agencyId: string) {
+async function initEmbeddings(tx: PrismaClient, logger: Logger, agencyId: string) {
   // Initialize embeddings for the agency
+  logger.info(`Initializing embeddings for agency ${agencyId}`);
+  const sections = await tx.section.findMany({
+    where: {
+      agencies: {
+        some: { agencyId },
+      },
+    },
+  });
+  logger.info(`Found ${sections.length} sections for agency ${agencyId}, initializing embeddings...`);
+  const promises = [];
+  for (const storedSection of sections) {
+    promises.push(upsertEmbeddings(tx as PrismaClient, logger, storedSection.id, storedSection.content));
+  }
+  await Promise.all(promises);
+  logger.info(`Initialized embeddings for agency ${agencyId}`);
 }
 
 export const processReference = inngest.createFunction(
@@ -184,25 +220,27 @@ export const processReference = inngest.createFunction(
     await step.run('process-sections', async () => {
       await prisma.$transaction(async (tx) => {
         for (const section of sections) {
+          const sectionId = `${section.title}.${section.identifier}`;
           if (section.removed) {
-            await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, '');
+            await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, []);
             if (!event.data.isCatchup && !event.data.isFirstCatchup) {
               // We only have embeddings after the first catchup
-              await removeEmbeddings(tx as PrismaClient, section);
+              await removeEmbeddings(tx as PrismaClient, logger, sectionId);
             }
             continue;
           }
           const content = await fetchSectionContent(event.data.date, section);
+          const text = parseXMLText(content);
           logger.info(`Fetched content for section ${section.identifier}`);
-          await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, content);
+          await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, text);
           if (!event.data.isCatchup && !event.data.isFirstCatchup) {
             // We only have embeddings after the first catchup
-            await upsertEmbeddings(tx as PrismaClient, event.data.parentId, event.data.agencyId, section, content);
+            await upsertEmbeddings(tx as PrismaClient, logger, sectionId, text);
           }
         }
         if (event.data.isFirstCatchup) {
           // Initialize embeddings for the agency
-          await initEmbeddings(tx as PrismaClient, event.data.parentId, event.data.agencyId);
+          await initEmbeddings(tx as PrismaClient, logger, event.data.agencyId);
         }
       });
     });
