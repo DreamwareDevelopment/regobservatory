@@ -47,38 +47,38 @@ model Agency {
 
 model AgencyContent {
   id        String   @id @default(uuid())
-  agencyId  String   @unique
+  agencyId  String   @unique @map("agency_id")
   agency    Agency   @relation(fields: [agencyId], references: [id])
   content   Json[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("agency_contents")
 }
 
 model AgencyEmbedding {
   id         String  @id @default(uuid())
-  agencyId   String
-  agency     Agency @relation(fields: [agencyId], references: [id])
+  agencyId   String  @map("agency_id")
+  agency     Agency  @relation(fields: [agencyId], references: [id])
   text       String
   title      Int
   identifier String
   type       String
   embedding  Unsupported("vector(1536)")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@map("agency_embeddings")
 }
 
 model AgencyHistory {
   id        String   @id @default(uuid())
-  agencyId  String
+  agencyId  String   @map("agency_id")
   agency    Agency   @relation(fields: [agencyId], references: [id])
   wordCount Int
   date      DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("agency_history")
 }
