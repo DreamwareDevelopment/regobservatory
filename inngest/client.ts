@@ -30,7 +30,6 @@ export const inngest = new Inngest({
         agencyId: string;
         parentId: string | null;
         isCatchup: boolean;
-        isFirstCatchup: boolean;
       };
     };
     [InngestEvent.LoadAgencies]: {

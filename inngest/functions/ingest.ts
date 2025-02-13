@@ -57,9 +57,7 @@ export const ingest = inngest.createFunction(
     const date = event.data.date || applicationState.nextProcessingDate || '2017-01-01';
     // runUntil is a development field to have reduced record fetching/processing during development
     const isToday = date === (applicationState.runUntil || dayjs().format('YYYY-MM-DD'));
-    let isFirstCatchup = false;
     if (!applicationState.isCaughtUp && isToday) {
-      isFirstCatchup = true;
       applicationState.isCaughtUp = true;
     }
     logger.info(`Ingesting from ${date}, isCaughtUp: ${applicationState.isCaughtUp}`);
@@ -77,7 +75,6 @@ export const ingest = inngest.createFunction(
           data: {
             date,
             isCatchup: !applicationState.isCaughtUp,
-            isFirstCatchup,
             reference,
             referenceHash: hash,
             agencyId: agency.id,

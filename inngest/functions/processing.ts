@@ -151,7 +151,7 @@ async function removeEmbeddings(logger: Logger, agencyId: string) {
 }
 
 async function insertEmbeddings(logger: Logger, agencyId: string, title: number, content: ParsedXMLTextArray) {
-  // Upsert embeddings for the agency content
+  // Insert embeddings for the agency content
   const chunks = content.flatMap(c => c.text.split('\n').map(t => ({ ...c, text: t })));
   const filteredChunks = chunks.filter(t => Boolean(t.text));
   if (!filteredChunks.length) {
@@ -160,7 +160,7 @@ async function insertEmbeddings(logger: Logger, agencyId: string, title: number,
   }
   logger.info(`Generating ${filteredChunks.length} embeddings for agency ${agencyId}`);
   const { embeddings, values } = await retryWithBackoff(async () => embedTexts(filteredChunks.map(c => c.text)), logger);
-  logger.info(`Upserting ${embeddings.length} embeddings for agency ${agencyId}`);
+  logger.info(`Inserting ${embeddings.length} embeddings for agency ${agencyId}`);
   const promises = [];
   for (let i = 0; i < embeddings.length; i++) {
     const embedding = embeddings[i];
@@ -181,22 +181,6 @@ async function insertEmbeddings(logger: Logger, agencyId: string, title: number,
     }
   }
   await Promise.all(promises);
-}
-
-async function initEmbeddings(logger: Logger, agencyId: string, title: number) {
-  // Initialize embeddings for the agency
-  logger.info(`Initializing embeddings for agency ${agencyId}`);
-  const content = await prisma.agencyContent.findUnique({
-    where: {
-      agencyId,
-    },
-  });
-  if (!content) {
-    return;
-  }
-  const contentArray = ParsedXMLTextArraySchema.parse(content.content);
-  await insertEmbeddings(logger, agencyId, title, contentArray);
-  logger.info(`Initialized embeddings for agency ${agencyId}`);
 }
 
 async function retryWithBackoff<T>(
@@ -261,18 +245,9 @@ export const processReference = inngest.createFunction(
         event.data.agencyId,
         text,
       );
-      if (!text.length && !event.data.isCatchup && !event.data.isFirstCatchup) {
-        // We only have embeddings after the first catchup
-        await removeEmbeddings(logger, event.data.agencyId);
-      }
-      if (!event.data.isCatchup && !event.data.isFirstCatchup) {
-        // We only have embeddings after the first catchup
+      if (!event.data.isCatchup) {
         await removeEmbeddings(logger, event.data.agencyId);
         await insertEmbeddings(logger, event.data.agencyId, reference.title, text);
-      }
-      if (event.data.isFirstCatchup) {
-        // Initialize embeddings for the agency
-        await initEmbeddings(logger, event.data.agencyId, reference.title);
       }
       return historicalCounts;
     });
