@@ -31,7 +31,6 @@ export const inngest = new Inngest({
         parentId: string | null;
         isCatchup: boolean;
         isFirstCatchup: boolean;
-        triggerFollowUp: boolean;
       };
     };
     [InngestEvent.LoadAgencies]: {

@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import md5 from "md5";
 import { CFRReference } from "@/lib/zod/agency";
 import dayjs from "@/lib/dayjs";
+import { APPLICATION_STATE_ID } from "./agencies";
 
 export const ingest = inngest.createFunction(
   {
@@ -81,13 +82,36 @@ export const ingest = inngest.createFunction(
             referenceHash: hash,
             agencyId: agency.id,
             parentId: agency.parentId,
-            // Only trigger follow up actions once for this function
-            triggerFollowUp: i === agencies.length - 1 && j === agency.cfrReferences.length - 1,
           },
         }));
       }
     }
     await Promise.all(promises);
+    const lastProcessed = dayjs(date);
+    const nextProcessingDate = lastProcessed.add(1, 'day').format('YYYY-MM-DD');
+    await step.run('update-application-state', async () => {
+      applicationState.nextProcessingDate = nextProcessingDate;
+      logger.info(`Last processed: ${lastProcessed.format('YYYY-MM-DD')}`);
+      logger.info(`Next processing date: ${nextProcessingDate}`);
+      await prisma.applicationState.update({
+        where: { id: APPLICATION_STATE_ID },
+        data: {
+          nextProcessingDate,
+          isCaughtUp: applicationState.isCaughtUp,
+        },
+      });
+    });
+    if (!applicationState.isCaughtUp) {
+      logger.info(`Sending catchup event for ${nextProcessingDate}`);
+      await step.sendEvent(`catchup-continue`, {
+        name: InngestEvent.Ingest,
+        data: {
+          date: nextProcessingDate,
+        },
+      });
+    } else {
+      logger.info(`Application state is caught up, all done.`);
+    }
   },
 );
 

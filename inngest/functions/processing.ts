@@ -3,10 +3,7 @@ import { parseXMLText } from "@/lib/xml";
 import { CFRReference } from "@/lib/zod/agency";
 import { ParsedXMLTextArray, ParsedXMLTextArraySchema } from "@/lib/zod/data";
 import dayjs from "@/lib/dayjs";
-import { ingest } from "./ingest";
-import { APPLICATION_STATE_ID } from "./agencies";
 import prisma from "@/lib/prisma";
-import { PrismaClient } from "@prisma/client";
 import { embedTexts } from "@/lib/ai";
 import { Logger } from "inngest/middleware/logger";
 
@@ -40,7 +37,9 @@ async function fetchReferenceContent(logger: Logger, date: string, reference: CF
   }
 
   if (response.status === 504) {
-    throw new Error('Gateway timeout');
+    // TODO: The gov server is timing out on large responses, so we skip this reference. Needs to be fixed upstream.
+    logger.error('Gateway timeout');
+    return null;
   }
 
   if (!response.ok) {
@@ -67,7 +66,6 @@ function diffWordCount(logger: Logger, previousContent: string[], currentContent
 }
 
 async function updateHistory(
-  tx: PrismaClient,
   logger: Logger,
   dateString: string,
   agencyId: string,
@@ -75,7 +73,7 @@ async function updateHistory(
 ) {
   const date = dayjs(dateString);
   // Get the previous history entry for the agency
-  const previousHistory = await tx.agencyHistory.findFirst({
+  const previousHistory = await prisma.agencyHistory.findFirst({
     where: {
       agencyId,
       date: {
@@ -86,8 +84,7 @@ async function updateHistory(
       date: 'desc',
     },
   });
-  logger.info(`Previous history: ${previousHistory?.wordCount}`);
-  let currentHistory = await tx.agencyHistory.findFirst({
+  let currentHistory = await prisma.agencyHistory.findFirst({
     where: {
       agencyId,
       date: {
@@ -100,7 +97,7 @@ async function updateHistory(
   });
   if (!currentHistory) {
     // Create a new history entry for the agency
-    currentHistory = await tx.agencyHistory.create({
+    currentHistory = await prisma.agencyHistory.create({
       data: {
         agencyId,
         wordCount: previousHistory?.wordCount ?? 0,
@@ -109,7 +106,7 @@ async function updateHistory(
     });
   }
   // Then get the current stored agency content if any
-  const storedAgencyContent = await tx.agencyContent.findUnique({
+  const storedAgencyContent = await prisma.agencyContent.findUnique({
     where: {
       agencyId,
     },
@@ -118,17 +115,17 @@ async function updateHistory(
   // Then diff and add/remove the diffed word count to/from the current history entry
   const wordCountDiff = diffWordCount(logger, storedContent.map(c => c.text), newContent.map(c => c.text));
   currentHistory.wordCount += wordCountDiff;
-  await tx.agencyHistory.update({
+  await prisma.agencyHistory.update({
     where: { id: currentHistory.id },
     data: { wordCount: currentHistory.wordCount },
   });
   // Then save or delete the agency content
   if (!newContent.length && storedAgencyContent) {
-    await tx.agencyContent.delete({
+    await prisma.agencyContent.delete({
       where: { agencyId },
     });
   } else {
-    await tx.agencyContent.upsert({
+    await prisma.agencyContent.upsert({
       where: { agencyId },
       update: {
         content: newContent,
@@ -139,12 +136,13 @@ async function updateHistory(
       }
     });
   }
+  return { current: currentHistory.wordCount, previous: previousHistory?.wordCount ?? 0 };
 }
 
-async function removeEmbeddings(tx: PrismaClient, logger: Logger, agencyId: string) {
+async function removeEmbeddings(logger: Logger, agencyId: string) {
   // Remove the embeddings for the agency
   logger.info(`Removing embeddings for agency ${agencyId}`);
-  await tx.agencyEmbedding.deleteMany({
+  await prisma.agencyEmbedding.deleteMany({
     where: {
       agencyId,
     },
@@ -152,25 +150,34 @@ async function removeEmbeddings(tx: PrismaClient, logger: Logger, agencyId: stri
   logger.info(`Removed embeddings for agency ${agencyId}`);
 }
 
-async function upsertEmbeddings(logger: Logger, agencyId: string, title: number, content: ParsedXMLTextArray) {
+async function insertEmbeddings(logger: Logger, agencyId: string, title: number, content: ParsedXMLTextArray) {
   // Upsert embeddings for the agency content
   const chunks = content.flatMap(c => c.text.split('\n').map(t => ({ ...c, text: t })));
-  logger.info(`Generating ${chunks.length} embeddings for agency ${agencyId}`);
-  const { embeddings } = await embedTexts(chunks.map(c => c.text));
+  const filteredChunks = chunks.filter(t => Boolean(t.text));
+  if (!filteredChunks.length) {
+    logger.info(`No content to embed for agency ${agencyId}`);
+    return;
+  }
+  logger.info(`Generating ${filteredChunks.length} embeddings for agency ${agencyId}`);
+  const { embeddings, values } = await retryWithBackoff(async () => embedTexts(filteredChunks.map(c => c.text)), logger);
   logger.info(`Upserting ${embeddings.length} embeddings for agency ${agencyId}`);
   const promises = [];
-  for (let i = 0; i < chunks.length; i++) {
+  for (let i = 0; i < embeddings.length; i++) {
     const embedding = embeddings[i];
-    const chunk = chunks[i];
+    const { identifier, type, text } = filteredChunks[i];
+    const value = values[i];
+    if (value !== text) {
+      throw new Error(`Value mismatch: ${value} !== ${text}`);
+    }
     // Ensure that agencyId, chunk, and embedding are not null
-    if (agencyId && chunk && embedding) {
+    if (agencyId && identifier && type && text && embedding) {
       const formattedEmbedding = `[${embedding.join(',')}]`;
       promises.push(prisma.$executeRaw`
-        INSERT INTO "agency_embeddings" ("id", "agencyId", "title", "identifier", "type", "text", "embedding", "createdAt", "updatedAt") 
-        VALUES (gen_random_uuid(), ${agencyId}, ${title}, ${chunk.identifier}, ${chunk.type}, ${chunk.text}, ${formattedEmbedding}, NOW(), NOW())
+        INSERT INTO "agency_embeddings" ("id", "agency_id", "title", "identifier", "type", "text", "embedding", "created_at", "updated_at") 
+        VALUES (gen_random_uuid(), ${agencyId}, ${title}, ${identifier}, ${type}, ${text}, ${formattedEmbedding}, NOW(), NOW())
       `);
     } else {
-      logger.error(`Null value detected: agencyId=${agencyId}, chunk=${chunk}, embedding=${embedding?.slice(0, 10)}`);
+      logger.error(`Null value detected: agencyId=${agencyId}, identifier=${identifier}, type=${type}, text=${text}, embedding=${embedding?.slice(0, 10)}`);
     }
   }
   await Promise.all(promises);
@@ -185,19 +192,18 @@ async function initEmbeddings(logger: Logger, agencyId: string, title: number) {
     },
   });
   if (!content) {
-    throw new Error(`No content found for agency ${agencyId}`);
+    return;
   }
   const contentArray = ParsedXMLTextArraySchema.parse(content.content);
-  logger.info(`Found agency content for ${agencyId}, initializing embeddings...`);
-  await upsertEmbeddings(logger, agencyId, title, contentArray);
+  await insertEmbeddings(logger, agencyId, title, contentArray);
   logger.info(`Initialized embeddings for agency ${agencyId}`);
 }
 
 async function retryWithBackoff<T>(
   operation: () => Promise<T>,
   logger: Logger,
-  maxAttempts: number = 10,
-  backoffFactor: number = 2000
+  maxAttempts: number = 20,
+  backoffFactor: number = 1000
 ): Promise<T> {
   let attempts = 0;
 
@@ -205,12 +211,12 @@ async function retryWithBackoff<T>(
     try {
       return await operation();
     } catch (error) {
-      if (error instanceof Error && (error.message.includes('Rate limited') || error.message.includes('Gateway timeout') || error.message.includes('fetch failed'))) {
+      if (error instanceof Error && (error.message.includes('Rate limited') || error.message.includes('fetch failed') || error.message.includes('AI_RetryError'))) {
         attempts++;
         const baseWaitTime = backoffFactor * Math.pow(2, attempts);
         const jitter = Math.random() * baseWaitTime;
         const waitTime = baseWaitTime + jitter;
-        logger.warn(`Rate limited. Retrying in ${(waitTime / 1000).toFixed(2)} seconds...`);
+        logger.warn(`Rate limited, reason: ${error.message}. Retrying in ${(waitTime / 1000).toFixed(2)} seconds...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       } else {
         throw error;
@@ -224,7 +230,7 @@ export const processReference = inngest.createFunction(
   {
     id: "process-reference",
     concurrency: [{
-      limit: 10,
+      limit: 5,
       scope: "fn",
       key: "event.data.date", // Only 10 references per date can be processed at a time
     }, {
@@ -233,7 +239,7 @@ export const processReference = inngest.createFunction(
       // Only one unique reference can be processed at a time, this is for multiple agencies with the same reference
       key: "event.data.referenceHash",
     }],
-    retries: 0,
+    retries: 5,
   },
   { event: InngestEvent.ProcessReference },
   async ({ event, logger, step }) => {
@@ -243,55 +249,34 @@ export const processReference = inngest.createFunction(
       () => fetchReferenceContent(logger, event.data.date, reference),
       logger
     );
+    if (!xmlContent) {
+      return { date: event.data.date, reference, text: [] };
+    }
     // logger.info(`Fetched reference content for ${event.data.reference.title}\n: ${xmlContent}`);
     const text = parseXMLText(xmlContent, logger);
-    await step.run('process-agency-content', async () => {
-      await prisma.$transaction(async (tx) => {
-        await updateHistory(
-          tx as PrismaClient,
-          logger,
-          event.data.date,
-          event.data.agencyId,
-          text,
-        );
-        if (!text.length && !event.data.isCatchup && !event.data.isFirstCatchup) {
-          // We only have embeddings after the first catchup
-          await removeEmbeddings(tx as PrismaClient, logger, event.data.agencyId);
-        }
-      });
+    const { current, previous } = await step.run('process-agency-content', async () => {
+      const historicalCounts = await updateHistory(
+        logger,
+        event.data.date,
+        event.data.agencyId,
+        text,
+      );
+      if (!text.length && !event.data.isCatchup && !event.data.isFirstCatchup) {
+        // We only have embeddings after the first catchup
+        await removeEmbeddings(logger, event.data.agencyId);
+      }
       if (!event.data.isCatchup && !event.data.isFirstCatchup) {
         // We only have embeddings after the first catchup
-        await upsertEmbeddings(logger, event.data.agencyId, reference.title, text);
+        await removeEmbeddings(logger, event.data.agencyId);
+        await insertEmbeddings(logger, event.data.agencyId, reference.title, text);
       }
       if (event.data.isFirstCatchup) {
         // Initialize embeddings for the agency
         await initEmbeddings(logger, event.data.agencyId, reference.title);
       }
+      return historicalCounts;
     });
 
-    if (event.data.triggerFollowUp) {
-      await step.run('update-application-state', async () => {
-        const lastProcessed = dayjs(event.data.date);
-        logger.info(`Last processed: ${lastProcessed.format('YYYY-MM-DD HH:mm:ss')}`);
-        await prisma.applicationState.update({
-          where: { id: APPLICATION_STATE_ID },
-          data: {
-            nextProcessingDate: lastProcessed.add(1, 'day').format('YYYY-MM-DD'),
-            isCaughtUp: !event.data.isCatchup,
-          },
-        });
-      });
-    }
-    // This is only done on the last reference of the last agency for a given date as it re-runs ingest for all agencies on the next date.
-    if (event.data.isCatchup && event.data.triggerFollowUp) {
-      await step.invoke(`catchup-continue`, {
-        function: ingest,
-        data: {
-          ...event.data,
-          date: dayjs(event.data.date).add(1, 'day').format('YYYY-MM-DD'),
-        },
-      });
-    }
-    return { date: event.data.date, reference, text };
+    return { date: event.data.date, reference, current, previous };
   }
 );
