@@ -35,7 +35,8 @@ model Agency {
   parent      Agency?   @relation("AgencyHierarchy", fields: [parentId], references: [id])
   children    Agency[]  @relation("AgencyHierarchy")
 
-  sections    AgencySections[]
+  content     AgencyContent?
+  embeddings  AgencyEmbedding[]
   history     AgencyHistory[]
 
   createdAt   DateTime  @default(now()) @map("created_at")
@@ -44,40 +45,30 @@ model Agency {
   @@map("agencies")
 }
 
-model Section {
-  id         String   @id // `${title}.${identifier}`
-  title      Int
-  part       String
-  identifier String
-  content    String[]   // TODO: This should be put in blob storage
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  agencies   AgencySections[]
-  embeddings SectionEmbedding[]
-
-  @@map("sections")
-}
-
-model SectionEmbedding {
-  id        String  @id @default(uuid())
-  sectionId String
-  section   Section @relation(fields: [sectionId], references: [id])
-  text      String
-  embedding Unsupported("vector(1536)")
+model AgencyContent {
+  id        String   @id @default(uuid())
+  agencyId  String   @unique
+  agency    Agency   @relation(fields: [agencyId], references: [id])
+  content   Json[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@map("section_embeddings")
+  @@map("agency_contents")
 }
 
-model AgencySections {
-  sectionId String
-  agencyId  String
-  section   Section @relation(fields: [sectionId], references: [id])
-  agency    Agency  @relation(fields: [agencyId], references: [id])
+model AgencyEmbedding {
+  id         String  @id @default(uuid())
+  agencyId   String
+  agency     Agency @relation(fields: [agencyId], references: [id])
+  text       String
+  title      Int
+  identifier String
+  type       String
+  embedding  Unsupported("vector(1536)")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  @@id([agencyId, sectionId])
-  @@map("agency_sections")
+  @@map("agency_embeddings")
 }
 
 model AgencyHistory {

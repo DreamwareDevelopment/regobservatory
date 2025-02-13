@@ -1,99 +1,67 @@
 import { parseString } from 'xml2js';
+import { ParsedXMLTextArray } from './zod/data';
+import { Logger } from 'inngest/middleware/logger';
 
-// Function to parse XML and handle dynamic structure with a callback
-export function parseXMLText(xmlData: string): string[] {
-  const text: string[] = [];
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function parseXMLText(xmlData: string, logger: Logger): ParsedXMLTextArray {
+  const text: ParsedXMLTextArray = [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function processDiv(div: any, identifier: string, type: string) {
+    // Extract type and identifier if they exist
+    const currentIdentifier = div.$?.N ?? identifier;
+    const currentType = div.$?.TYPE ?? type;
+
+    // Extract HEAD text if it exists
+    const headText = div.HEAD ? div.HEAD[0] : '';
+    if (headText) {
+      text.push({ type: currentType, identifier: currentIdentifier, text: headText });
+    }
+
+    // Extract paragraphs if they exist
+    if (div.P) {
+      // logger.info(`Paragraphs: ${div.P.toString()}`);
+      const paragraphs: string[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      div.P.forEach((p: any) => {
+        const paragraphText = p._ || p.toString() || '';
+        // logger.info(`Found paragraph for ${currentIdentifier}: ${paragraphText}`);
+        if (paragraphText) {
+          paragraphs.push(paragraphText);
+        }
+      });
+      text.push({ type: currentType, identifier: currentIdentifier, text: paragraphs.join('\n') });
+      // logger.info(`Found ${div.P.length} paragraphs for ${currentIdentifier}`);
+    }
+
+    // Recursively process any nested DIV elements
+    Object.keys(div).forEach((key) => {
+      if (key.startsWith('DIV')) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        div[key].forEach((nestedDiv: any) => {
+          processDiv(nestedDiv, currentIdentifier, currentType);
+        });
+      }
+    });
+  }
+
   parseString(xmlData, (err, result) => {
     if (err) {
       console.error('Error parsing XML:', err);
       return;
     }
 
-    // Check if DIV8 exists
-    if (result.DIV8) {
-      const div8 = result.DIV8;
-
-      // Extract HEAD text if it exists
-      const headText = div8.HEAD ? div8.HEAD[0] : '';
-      if (headText) {
-        text.push(headText);
-      }
-
-      // Extract paragraphs if they exist
-      if (div8.P) {
+    // Start processing from the top-level DIV elements
+    Object.keys(result).forEach((key) => {
+      if (key.startsWith('DIV')) {
+        const divs = Array.isArray(result[key]) ? result[key] : [result[key]];
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        div8.P.forEach((p: any) => {
-          const paragraphText = p._ || '';
-          if (paragraphText) {
-            text.push(paragraphText);
-          }
+        divs.forEach((div: any) => {
+          processDiv(div, '', '');
         });
       }
-    }
+    });
   });
+
   return text;
-}
-
-export function convertXMLToHTML(xmlData: string): string {
-  let htmlOutput = '';
-
-  parseString(xmlData, (err, result) => {
-    if (err) {
-      console.error('Error parsing XML:', err);
-      return;
-    }
-
-    // Check if DIV8 exists
-    if (result.DIV8) {
-      const div8 = result.DIV8;
-
-      // Start HTML structure
-      htmlOutput += '<div class="section">';
-
-      // Add section attributes
-      const sectionNumber = div8.$?.N || '';
-      const sectionType = div8.$?.TYPE || '';
-      const hierarchyMetadata = div8.$?.hierarchy_metadata || '';
-
-      if (sectionNumber) {
-        htmlOutput += `<h2>Section Number: ${sectionNumber}</h2>`;
-      }
-      if (sectionType) {
-        htmlOutput += `<p>Type: ${sectionType}</p>`;
-      }
-      if (hierarchyMetadata) {
-        htmlOutput += `<p>Metadata: ${hierarchyMetadata}</p>`;
-      }
-
-      // Add HEAD text if it exists
-      const headText = div8.HEAD ? div8.HEAD[0] : '';
-      if (headText) {
-        htmlOutput += `<h3>${headText}</h3>`;
-      }
-
-      // Add paragraphs if they exist
-      if (div8.P) {
-        htmlOutput += '<div class="paragraphs">';
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        div8.P.forEach((p: any) => {
-          const paragraphText = p._ || '';
-          if (paragraphText) {
-            htmlOutput += `<p>${paragraphText}</p>`;
-          }
-        });
-        htmlOutput += '</div>';
-      }
-
-      // Add citation if it exists
-      const citation = div8.CITA ? div8.CITA[0]._?.trim() : '';
-      if (citation) {
-        htmlOutput += `<p class="citation">${citation}</p>`;
-      }
-
-      // Close HTML structure
-      htmlOutput += '</div>';
-    }
-  });
-
-  return htmlOutput;
 }

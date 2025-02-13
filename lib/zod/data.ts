@@ -1,15 +1,12 @@
 import { z } from "zod";
 
-export const ContentVersionSchema = z.object({
-  identifier: z.string(),
-  part: z.string().nullable(),
-  removed: z.boolean(),
+export const ParsedXMLTextSchema = z.object({
   type: z.string(),
+  identifier: z.string(),
+  text: z.string(),
 });
 
-export const VersionResponseSchema = z.object({
-  content_versions: z.array(ContentVersionSchema),
-});
+export const ParsedXMLTextArraySchema = z.array(ParsedXMLTextSchema);
 
-export type ContentVersion = z.infer<typeof ContentVersionSchema>;
-export type VersionResponse = z.infer<typeof VersionResponseSchema>;
+export type ParsedXMLText = z.infer<typeof ParsedXMLTextSchema>;
+export type ParsedXMLTextArray = z.infer<typeof ParsedXMLTextArraySchema>;

@@ -1,7 +1,7 @@
 import { inngest, InngestEvent } from "../client";
 import { parseXMLText } from "@/lib/xml";
 import { CFRReference } from "@/lib/zod/agency";
-import { ContentVersion, VersionResponseSchema } from "@/lib/zod/data";
+import { ParsedXMLTextArray, ParsedXMLTextArraySchema } from "@/lib/zod/data";
 import dayjs from "@/lib/dayjs";
 import { ingest } from "./ingest";
 import { APPLICATION_STATE_ID } from "./agencies";
@@ -10,16 +10,8 @@ import { PrismaClient } from "@prisma/client";
 import { embedTexts } from "@/lib/ai";
 import { Logger } from "inngest/middleware/logger";
 
-// TODO: What the fuck, the API doesn't ACTUALLY support filtering on this endpoint.
-// This is a huge issue if it doesn't correctly filter by chapter, subchapter, etc...
-// I'd have to fetch the entire title xml and parse it day by day to get the correct sections and diffs for a given agency.
-// This is what I get for trusting the fucking government.
-async function fetchReferenceSections(logger: Logger, reference: CFRReference, date: string) {
-  const params = new URLSearchParams({
-    'issue_date[on]': date
-  });
-
-  // Add all possible reference filters if they exist
+async function fetchReferenceContent(logger: Logger, date: string, reference: CFRReference) {
+  const params = new URLSearchParams();
   if (reference.chapter) {
     params.append('chapter', reference.chapter);
   }
@@ -39,7 +31,7 @@ async function fetchReferenceSections(logger: Logger, reference: CFRReference, d
     params.append('appendix', reference.appendix);
   }
 
-  const url = `https://www.ecfr.gov/api/versioner/v1/versions/title-${reference.title}.json?${params.toString()}`;
+  const url = `https://www.ecfr.gov/api/versioner/v1/full/${date}/title-${reference.title}.xml?${params.toString()}`;
   // logger.info(url);
   const response = await fetch(url);
 
@@ -47,26 +39,8 @@ async function fetchReferenceSections(logger: Logger, reference: CFRReference, d
     throw new Error('Rate limited');
   }
 
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
-  }
-
-  const data = await response.json();
-  return VersionResponseSchema.parse(data);
-}
-
-async function fetchSectionContent(logger: Logger, title: number, date: string, section: ContentVersion) {
-  const [part,] = section.identifier.split('.');
-  const params = new URLSearchParams({
-    part,
-    section: section.identifier,
-  });
-  const url = `https://www.ecfr.gov/api/versioner/v1/full/${date}/title-${title}.xml?${params.toString()}`;
-  // logger.info(url);
-  const response = await fetch(url);
-
-  if (response.status === 429) {
-    throw new Error('Rate limited');
+  if (response.status === 504) {
+    throw new Error('Gateway timeout');
   }
 
   if (!response.ok) {
@@ -86,14 +60,12 @@ function diffWordCount(previousContent: string[], currentContent: string[]) {
   return currentWordCount - previousWordCount;
 }
 
-async function updateSectionHistory(
+async function updateHistory(
   tx: PrismaClient,
   logger: Logger,
   dateString: string,
   agencyId: string,
-  title: number,
-  section: ContentVersion,
-  newContent: string[],
+  newContent: ParsedXMLTextArray,
 ) {
   const date = dayjs(dateString);
   // Get the previous history entry for the agency
@@ -130,97 +102,88 @@ async function updateSectionHistory(
       },
     });
   }
-  // Then get the current stored section if any
-  const sectionId = `${title}.${section.identifier}`;
-  const storedSection = await tx.section.findUnique({
+  // Then get the current stored agency content if any
+  const storedAgencyContent = await tx.agencyContent.findUnique({
     where: {
-      id: sectionId,
-    }
+      id: agencyId,
+    },
   });
+  const storedContent = ParsedXMLTextArraySchema.parse(storedAgencyContent?.content ?? []);
   // Then diff and add/remove the diffed word count to/from the current history entry
-  const wordCountDiff = diffWordCount(storedSection?.content ?? [], newContent);
+  const wordCountDiff = diffWordCount(storedContent.map(c => c.text), newContent.map(c => c.text));
   currentHistory.wordCount += wordCountDiff;
   await tx.agencyHistory.update({
     where: { id: currentHistory.id },
     data: { wordCount: currentHistory.wordCount },
   });
-  // Then save or delete the section
-  if (section.removed) {
-    await tx.section.delete({
-      where: { id: sectionId },
+  // Then save or delete the agency content
+  if (!newContent.length && storedAgencyContent) {
+    await tx.agencyContent.delete({
+      where: { agencyId },
     });
   } else {
-    await tx.section.upsert({
-      where: { id: sectionId },
+    await tx.agencyContent.upsert({
+      where: { agencyId },
       update: {
         content: newContent,
       },
       create: {
-        id: sectionId,
-        title,
-        part: section.part!,
-        identifier: section.identifier,
+        agencyId,
         content: newContent,
-        agencies: {
-          create: {
-            agencyId,
-          }
-        }
       }
     });
   }
 }
 
-async function removeEmbeddings(tx: PrismaClient, logger: Logger, sectionId: string) {
-  // Remove the embeddings for the section and all agencies
-  logger.info(`Removing embeddings for section ${sectionId}`);
-  await tx.sectionEmbedding.deleteMany({
+async function removeEmbeddings(tx: PrismaClient, logger: Logger, agencyId: string) {
+  // Remove the embeddings for the agency
+  logger.info(`Removing embeddings for agency ${agencyId}`);
+  await tx.agencyEmbedding.deleteMany({
     where: {
-      sectionId,
+      agencyId,
     },
   });
-  logger.info(`Removed embeddings for section ${sectionId}`);
+  logger.info(`Removed embeddings for agency ${agencyId}`);
 }
 
-async function upsertEmbeddings(logger: Logger, sectionId: string, chunks: string[]) {
-  // Upsert embeddings for the section
-  logger.info(`Generating ${chunks.length} embeddings for section ${sectionId}`);
-  const { embeddings } = await embedTexts(chunks);
-  logger.info(`Upserting ${embeddings.length} embeddings for section ${sectionId}`);
+async function upsertEmbeddings(logger: Logger, agencyId: string, title: number, content: ParsedXMLTextArray) {
+  // Upsert embeddings for the agency content
+  const chunks = content.flatMap(c => c.text.split('\n').map(t => ({ ...c, text: t })));
+  logger.info(`Generating ${chunks.length} embeddings for agency ${agencyId}`);
+  const { embeddings } = await embedTexts(chunks.map(c => c.text));
+  logger.info(`Upserting ${embeddings.length} embeddings for agency ${agencyId}`);
   const promises = [];
   for (let i = 0; i < chunks.length; i++) {
     const embedding = embeddings[i];
     const chunk = chunks[i];
-    // Ensure that sectionId, chunk, and embedding are not null
-    if (sectionId && chunk && embedding) {
+    // Ensure that agencyId, chunk, and embedding are not null
+    if (agencyId && chunk && embedding) {
       const formattedEmbedding = `[${embedding.join(',')}]`;
       promises.push(prisma.$executeRaw`
-        INSERT INTO "section_embeddings" ("id", "sectionId", "text", "embedding", "createdAt", "updatedAt") 
-        VALUES (gen_random_uuid(), ${sectionId}, ${chunk}, ${formattedEmbedding}, NOW(), NOW())
+        INSERT INTO "agency_embeddings" ("id", "agencyId", "title", "identifier", "type", "text", "embedding", "createdAt", "updatedAt") 
+        VALUES (gen_random_uuid(), ${agencyId}, ${title}, ${chunk.identifier}, ${chunk.type}, ${chunk.text}, ${formattedEmbedding}, NOW(), NOW())
       `);
     } else {
-      logger.error(`Null value detected: sectionId=${sectionId}, chunk=${chunk}, embedding=${embedding?.slice(0, 10)}`);
+      logger.error(`Null value detected: agencyId=${agencyId}, chunk=${chunk}, embedding=${embedding?.slice(0, 10)}`);
     }
   }
   await Promise.all(promises);
 }
 
-async function initEmbeddings(logger: Logger, agencyId: string) {
+async function initEmbeddings(logger: Logger, agencyId: string, title: number) {
   // Initialize embeddings for the agency
   logger.info(`Initializing embeddings for agency ${agencyId}`);
-  const sections = await prisma.section.findMany({
+  const content = await prisma.agencyContent.findUnique({
     where: {
-      agencies: {
-        some: { agencyId },
-      },
+      id: agencyId,
     },
   });
-  logger.info(`Found ${sections.length} sections for agency ${agencyId}, initializing embeddings...`);
-  const promises = [];
-  for (const storedSection of sections) {
-    promises.push(upsertEmbeddings(logger, storedSection.id, storedSection.content));
+  if (!content) {
+    throw new Error(`No content found for agency ${agencyId}`);
   }
-  await Promise.all(promises);
+  const contentArray = ParsedXMLTextArraySchema.parse(content.content);
+  logger.info(`Found agency content for ${agencyId}, initializing embeddings...`);
+  await upsertEmbeddings(logger, agencyId, title, contentArray);
   logger.info(`Initialized embeddings for agency ${agencyId}`);
 }
 
@@ -236,7 +199,7 @@ async function retryWithBackoff<T>(
     try {
       return await operation();
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Rate limited')) {
+      if (error instanceof Error && (error.message.includes('Rate limited') || error.message.includes('Gateway timeout') || error.message.includes('fetch failed'))) {
         attempts++;
         const baseWaitTime = backoffFactor * Math.pow(2, attempts);
         const jitter = Math.random() * baseWaitTime;
@@ -269,74 +232,36 @@ export const processReference = inngest.createFunction(
   { event: InngestEvent.ProcessReference },
   async ({ event, logger, step }) => {
     logger.info(`Processing reference: ${JSON.stringify(event.data.reference, null, 2)}`);
-    const reference = event.data.reference as CFRReference;
-
-    const sections = await step.run('fetch-title-versions', async () => {
-      const result = await retryWithBackoff(
-        () => fetchReferenceSections(logger, reference, event.data.date),
-        logger
-      );
-      // TODO: Fix appendices not working
-      return result.content_versions.filter(v => v.type === 'section'); // Filter out appendices because the xml search doesn't work for them
-    });
-
-    logger.info(`Found ${sections.length} sections on ${event.data.date} for agency: ${event.data.agencyId} for reference: ${JSON.stringify(reference, null, 2)}`);
-
-    // Chunk the sections into arrays of 50
-    const chunkSize = 50;
-    const sectionChunks = [];
-    for (let i = 0; i < sections.length; i += chunkSize) {
-      sectionChunks.push(sections.slice(i, i + chunkSize));
-    }
-    // Process each chunk in a separate step so the serverless function doesn't timeout
-    for (const sectionChunk of sectionChunks) {
-      await step.run('process-sections', async () => {
-        for (const section of sectionChunk) {
-          const sectionId = `${event.data.reference.title}.${section.identifier}`;
-          const content = await retryWithBackoff(
-            () => fetchSectionContent(logger, event.data.reference.title, event.data.date, section),
-            logger
-          );
-          const text = parseXMLText(content);
-          await prisma.$transaction(async (tx) => {
-            if (section.removed) {
-              await updateSectionHistory(
-                tx as PrismaClient,
-                logger,
-                event.data.date,
-                event.data.agencyId,
-                event.data.reference.title,
-                section,
-                [],
-              );
-              if (!event.data.isCatchup && !event.data.isFirstCatchup) {
-                // We only have embeddings after the first catchup
-                await removeEmbeddings(tx as PrismaClient, logger, sectionId);
-              }
-              return;
-            }
-            logger.info(`Fetched content for § ${event.data.reference.title}.${event.data.reference.chapter}.${section.identifier}`);
-            await updateSectionHistory(
-              tx as PrismaClient,
-              logger,
-              event.data.date,
-              event.data.agencyId,
-              event.data.reference.title,
-              section,
-              text,
-            );
-          });
-          if (!event.data.isCatchup && !event.data.isFirstCatchup) {
-            // We only have embeddings after the first catchup
-            await upsertEmbeddings(logger, sectionId, text);
-          }
-        }
-        if (event.data.isFirstCatchup) {
-          // Initialize embeddings for the agency
-          await initEmbeddings(logger, event.data.agencyId);
+    const reference = event.data.reference;
+    const xmlContent = await retryWithBackoff(
+      () => fetchReferenceContent(logger, event.data.date, reference),
+      logger
+    );
+    // logger.info(`Fetched reference content for ${event.data.reference.title}\n: ${xmlContent}`);
+    const text = parseXMLText(xmlContent, logger);
+    await step.run('process-agency-content', async () => {
+      await prisma.$transaction(async (tx) => {
+        await updateHistory(
+          tx as PrismaClient,
+          logger,
+          event.data.date,
+          event.data.agencyId,
+          text,
+        );
+        if (!text.length && !event.data.isCatchup && !event.data.isFirstCatchup) {
+          // We only have embeddings after the first catchup
+          await removeEmbeddings(tx as PrismaClient, logger, event.data.agencyId);
         }
       });
-    }
+      if (!event.data.isCatchup && !event.data.isFirstCatchup) {
+        // We only have embeddings after the first catchup
+        await upsertEmbeddings(logger, event.data.agencyId, reference.title, text);
+      }
+      if (event.data.isFirstCatchup) {
+        // Initialize embeddings for the agency
+        await initEmbeddings(logger, event.data.agencyId, reference.title);
+      }
+    });
 
     if (event.data.triggerFollowUp) {
       await step.run('update-application-state', async () => {
@@ -361,6 +286,6 @@ export const processReference = inngest.createFunction(
         },
       });
     }
-    return { sections: sections.length, date: event.data.date };
+    return { date: event.data.date, reference, text };
   }
 );
