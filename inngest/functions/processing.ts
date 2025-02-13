@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { ingest } from "./ingest";
 import { APPLICATION_STATE_ID } from "./agencies";
 import prisma from "@/lib/prisma";
+import { PrismaClient } from "@prisma/client";
 
 async function fetchReferenceSections(reference: CFRReference, date: string) {
   const params = new URLSearchParams({
@@ -60,23 +61,97 @@ async function fetchSectionContent(date: string, section: ContentVersion) {
   return await response.text();
 }
 
-async function updateSectionHistory(parentId: string | null, agencyId: string, section: ContentVersion, newContent: string) {
-  // Get the current history for the agency
-  // Then get the current stored section if any
-  // Then diff and add/remove the diffed word count to/from the history
-  // Then append the new history
-  // Then store the new content
+function countWords(content: string) {
+  return content.split(/\s+/).filter(Boolean).length;
 }
 
-async function removeEmbeddings(section: ContentVersion) {
+function diffWordCount(previousContent: string, currentContent: string) {
+  const previousWordCount = countWords(previousContent);
+  const currentWordCount = countWords(currentContent);
+  return currentWordCount - previousWordCount;
+}
+
+async function updateSectionHistory(tx: PrismaClient, dateString: string, agencyId: string, section: ContentVersion, newContent: string) {
+  const date = dayjs(dateString);
+  // Get the previous history entry for the agency
+  const previousHistory = await tx.agencyHistory.findFirst({
+    where: {
+      agencyId,
+      createdAt: {
+        lte: date.hour(0).minute(0).second(0).toDate(),
+      },
+    },
+    orderBy: {
+      createdAt: 'desc',
+    },
+  });
+  let currentHistory = await tx.agencyHistory.findFirst({
+    where: {
+      agencyId,
+      createdAt: {
+        gte: date.hour(0).minute(0).second(0).toDate(),
+      },
+    },
+    orderBy: {
+      createdAt: 'desc',
+    },
+  });
+  if (!currentHistory) {
+    // Create a new history entry for the agency
+    currentHistory = await tx.agencyHistory.create({
+      data: { agencyId, wordCount: previousHistory?.wordCount ?? 0 },
+    });
+  }
+  // Then get the current stored section if any
+  const sectionId = `${section.title}.${section.identifier}`;
+  const storedSection = await tx.section.findUnique({
+    where: {
+      id: sectionId,
+    }
+  });
+  // Then diff and add/remove the diffed word count to/from the current history entry
+  const wordCountDiff = diffWordCount(storedSection?.content ?? '', newContent);
+  currentHistory.wordCount += wordCountDiff;
+  await tx.agencyHistory.update({
+    where: { id: currentHistory.id },
+    data: { wordCount: currentHistory.wordCount },
+  });
+  // Then save or delete the section
+  if (section.removed) {
+    await tx.section.delete({
+      where: { id: sectionId },
+    });
+  } else {
+    await tx.section.upsert({
+      where: { id: sectionId },
+      update: {
+        content: newContent,
+      },
+      create: {
+        id: sectionId,
+        title: section.title,
+        part: section.part,
+        identifier: section.identifier,
+        content: newContent,
+        agencies: {
+          create: {
+            agencyId,
+          }
+        }
+      }
+    });
+  }
+}
+
+async function removeEmbeddings(tx: PrismaClient, section: ContentVersion) {
   // Remove the embeddings for the section and all agencies
 }
 
-async function upsertEmbeddings(parentId: string | null, agencyId: string, section: ContentVersion, newContent: string) {
+async function upsertEmbeddings(tx: PrismaClient, parentId: string | null, agencyId: string, section: ContentVersion, newContent: string) {
   // Upsert embeddings for the section and agency
 }
 
-async function initEmbeddings(parentId: string | null, agencyId: string) {
+async function initEmbeddings(tx: PrismaClient, parentId: string | null, agencyId: string) {
   // Initialize embeddings for the agency
 }
 
@@ -107,27 +182,29 @@ export const processReference = inngest.createFunction(
 
     logger.info(`Found ${sections.length} sections on ${event.data.date} for reference: ${JSON.stringify(reference, null, 2)}`);
     await step.run('process-sections', async () => {
-      for (const section of sections) {
-        if (section.removed) {
-          await updateSectionHistory(event.data.parentId, event.data.agencyId, section, '');
+      await prisma.$transaction(async (tx) => {
+        for (const section of sections) {
+          if (section.removed) {
+            await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, '');
+            if (!event.data.isCatchup && !event.data.isFirstCatchup) {
+              // We only have embeddings after the first catchup
+              await removeEmbeddings(tx as PrismaClient, section);
+            }
+            continue;
+          }
+          const content = await fetchSectionContent(event.data.date, section);
+          logger.info(`Fetched content for section ${section.identifier}`);
+          await updateSectionHistory(tx as PrismaClient, event.data.date, event.data.agencyId, section, content);
           if (!event.data.isCatchup && !event.data.isFirstCatchup) {
             // We only have embeddings after the first catchup
-            await removeEmbeddings(section);
+            await upsertEmbeddings(tx as PrismaClient, event.data.parentId, event.data.agencyId, section, content);
           }
-          continue;
         }
-        const content = await fetchSectionContent(event.data.date, section);
-        logger.info(`Fetched content for section ${section.identifier}`);
-        await updateSectionHistory(event.data.parentId, event.data.agencyId, section, content);
-        if (!event.data.isCatchup && !event.data.isFirstCatchup) {
-          // We only have embeddings after the first catchup
-          await upsertEmbeddings(event.data.parentId, event.data.agencyId, section, content);
+        if (event.data.isFirstCatchup) {
+          // Initialize embeddings for the agency
+          await initEmbeddings(tx as PrismaClient, event.data.parentId, event.data.agencyId);
         }
-      }
-      if (event.data.isFirstCatchup) {
-        // Initialize embeddings for the agency
-        await initEmbeddings(event.data.parentId, event.data.agencyId);
-      }
+      });
     });
     if (event.data.triggerFollowUp) {
       await step.run('update-application-state', async () => {

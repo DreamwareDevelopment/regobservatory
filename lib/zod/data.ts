@@ -10,7 +10,7 @@ export const ContentVersionSchema = z.object({
   substantive: z.boolean(),
   removed: z.boolean(),
   subpart: z.string().nullable(),
-  title: z.string(),
+  title: z.number(),
   type: z.string()
 });
 
