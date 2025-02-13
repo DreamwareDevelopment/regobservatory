@@ -64,14 +64,14 @@ export const ingest = inngest.createFunction(
     logger.info(`Ingesting from ${date}, isCaughtUp: ${applicationState.isCaughtUp}`);
 
     // Ingest each agency
+    const promises = [];
     for (let i = 0; i < agencies.length; i++) {
       const agency = agencies[i];
       // Ingest each reference for the agency
       for (let j = 0; j < agency.cfrReferences.length; j++) {
         const reference = agency.cfrReferences[j] as CFRReference;
         const hash = md5(JSON.stringify(reference));
-        // TODO: Parallelize this
-        await step.invoke(`process-${agency.id}-${hash}`, {
+        promises.push(step.invoke(`process-${agency.id}-${hash}`, {
           function: processReference,
           data: {
             date,
@@ -84,12 +84,10 @@ export const ingest = inngest.createFunction(
             // Only trigger follow up actions once for this function
             triggerFollowUp: i === agencies.length - 1 && j === agency.cfrReferences.length - 1,
           },
-        });
+        }));
       }
     }
-    return {
-      agencies,
-    };
+    await Promise.all(promises);
   },
 );
 

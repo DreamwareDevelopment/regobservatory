@@ -1,17 +1,10 @@
 import { z } from "zod";
 
 export const ContentVersionSchema = z.object({
-  date: z.string(),
-  amendment_date: z.string(),
-  issue_date: z.string(),
   identifier: z.string(),
-  name: z.string(),
-  part: z.string(),
-  substantive: z.boolean(),
+  part: z.string().nullable(),
   removed: z.boolean(),
-  subpart: z.string().nullable(),
-  title: z.string(),
-  type: z.string()
+  type: z.string(),
 });
 
 export const VersionResponseSchema = z.object({

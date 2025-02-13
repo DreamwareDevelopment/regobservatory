@@ -14,10 +14,3 @@ export async function embedTexts(values: string[]) {
     values,
   });
 }
-
-export function generateChunks(input: string): string[] {
-  return input
-    .trim()
-    .split('.')
-    .filter(i => i !== '');
-};

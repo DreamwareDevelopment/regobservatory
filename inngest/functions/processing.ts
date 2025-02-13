@@ -7,9 +7,13 @@ import { ingest } from "./ingest";
 import { APPLICATION_STATE_ID } from "./agencies";
 import prisma from "@/lib/prisma";
 import { PrismaClient } from "@prisma/client";
-import { embedTexts, generateChunks } from "@/lib/ai";
+import { embedTexts } from "@/lib/ai";
 import { Logger } from "inngest/middleware/logger";
 
+// TODO: What the fuck, the API doesn't ACTUALLY support filtering on this endpoint.
+// This is a huge issue if it doesn't correctly filter by chapter, subchapter, etc...
+// I'd have to fetch the entire title xml and parse it day by day to get the correct sections and diffs for a given agency.
+// This is what I get for trusting the fucking government.
 async function fetchReferenceSections(logger: Logger, reference: CFRReference, date: string) {
   const params = new URLSearchParams({
     'issue_date[on]': date
@@ -36,8 +40,12 @@ async function fetchReferenceSections(logger: Logger, reference: CFRReference, d
   }
 
   const url = `https://www.ecfr.gov/api/versioner/v1/versions/title-${reference.title}.json?${params.toString()}`;
-  logger.info(url);
+  // logger.info(url);
   const response = await fetch(url);
+
+  if (response.status === 429) {
+    throw new Error('Rate limited');
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
@@ -47,15 +55,19 @@ async function fetchReferenceSections(logger: Logger, reference: CFRReference, d
   return VersionResponseSchema.parse(data);
 }
 
-async function fetchSectionContent(logger: Logger, date: string, section: ContentVersion) {
+async function fetchSectionContent(logger: Logger, title: number, date: string, section: ContentVersion) {
   const [part,] = section.identifier.split('.');
   const params = new URLSearchParams({
     part,
     section: section.identifier,
   });
-  const url = `https://www.ecfr.gov/api/versioner/v1/full/${date}/title-${section.title}.xml?${params.toString()}`;
-  logger.info(url);
+  const url = `https://www.ecfr.gov/api/versioner/v1/full/${date}/title-${title}.xml?${params.toString()}`;
+  // logger.info(url);
   const response = await fetch(url);
+
+  if (response.status === 429) {
+    throw new Error('Rate limited');
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
@@ -74,7 +86,15 @@ function diffWordCount(previousContent: string[], currentContent: string[]) {
   return currentWordCount - previousWordCount;
 }
 
-async function updateSectionHistory(tx: PrismaClient, logger: Logger, dateString: string, agencyId: string, section: ContentVersion, newContent: string[]) {
+async function updateSectionHistory(
+  tx: PrismaClient,
+  logger: Logger,
+  dateString: string,
+  agencyId: string,
+  title: number,
+  section: ContentVersion,
+  newContent: string[],
+) {
   const date = dayjs(dateString);
   // Get the previous history entry for the agency
   const previousHistory = await tx.agencyHistory.findFirst({
@@ -111,7 +131,7 @@ async function updateSectionHistory(tx: PrismaClient, logger: Logger, dateString
     });
   }
   // Then get the current stored section if any
-  const sectionId = `${section.title}.${section.identifier}`;
+  const sectionId = `${title}.${section.identifier}`;
   const storedSection = await tx.section.findUnique({
     where: {
       id: sectionId,
@@ -137,8 +157,8 @@ async function updateSectionHistory(tx: PrismaClient, logger: Logger, dateString
       },
       create: {
         id: sectionId,
-        title: parseInt(section.title),
-        part: section.part,
+        title,
+        part: section.part!,
         identifier: section.identifier,
         content: newContent,
         agencies: {
@@ -162,9 +182,8 @@ async function removeEmbeddings(tx: PrismaClient, logger: Logger, sectionId: str
   logger.info(`Removed embeddings for section ${sectionId}`);
 }
 
-async function upsertEmbeddings(logger: Logger, sectionId: string, newContent: string[]) {
+async function upsertEmbeddings(logger: Logger, sectionId: string, chunks: string[]) {
   // Upsert embeddings for the section
-  const chunks = newContent.flatMap(content => generateChunks(content));
   logger.info(`Generating ${chunks.length} embeddings for section ${sectionId}`);
   const { embeddings } = await embedTexts(chunks);
   logger.info(`Upserting ${embeddings.length} embeddings for section ${sectionId}`);
@@ -172,7 +191,16 @@ async function upsertEmbeddings(logger: Logger, sectionId: string, newContent: s
   for (let i = 0; i < chunks.length; i++) {
     const embedding = embeddings[i];
     const chunk = chunks[i];
-    promises.push(prisma.$executeRaw`INSERT INTO "section_embeddings" ("sectionId", "text", "embedding") VALUES (${sectionId}, ${chunk}, ${embedding})`);
+    // Ensure that sectionId, chunk, and embedding are not null
+    if (sectionId && chunk && embedding) {
+      const formattedEmbedding = `[${embedding.join(',')}]`;
+      promises.push(prisma.$executeRaw`
+        INSERT INTO "section_embeddings" ("id", "sectionId", "text", "embedding", "createdAt", "updatedAt") 
+        VALUES (gen_random_uuid(), ${sectionId}, ${chunk}, ${formattedEmbedding}, NOW(), NOW())
+      `);
+    } else {
+      logger.error(`Null value detected: sectionId=${sectionId}, chunk=${chunk}, embedding=${embedding?.slice(0, 10)}`);
+    }
   }
   await Promise.all(promises);
 }
@@ -196,6 +224,33 @@ async function initEmbeddings(logger: Logger, agencyId: string) {
   logger.info(`Initialized embeddings for agency ${agencyId}`);
 }
 
+async function retryWithBackoff<T>(
+  operation: () => Promise<T>,
+  logger: Logger,
+  maxAttempts: number = 10,
+  backoffFactor: number = 2000
+): Promise<T> {
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Rate limited')) {
+        attempts++;
+        const baseWaitTime = backoffFactor * Math.pow(2, attempts);
+        const jitter = Math.random() * baseWaitTime;
+        const waitTime = baseWaitTime + jitter;
+        logger.warn(`Rate limited. Retrying in ${(waitTime / 1000).toFixed(2)} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw new Error('Max retry attempts reached');
+}
+
 export const processReference = inngest.createFunction(
   {
     id: "process-reference",
@@ -217,12 +272,15 @@ export const processReference = inngest.createFunction(
     const reference = event.data.reference as CFRReference;
 
     const sections = await step.run('fetch-title-versions', async () => {
-      const result = await fetchReferenceSections(logger, reference, event.data.date);
+      const result = await retryWithBackoff(
+        () => fetchReferenceSections(logger, reference, event.data.date),
+        logger
+      );
       // TODO: Fix appendices not working
       return result.content_versions.filter(v => v.type === 'section'); // Filter out appendices because the xml search doesn't work for them
     });
 
-    logger.info(`Found ${sections.length} sections on ${event.data.date} for reference: ${JSON.stringify(reference, null, 2)}`);
+    logger.info(`Found ${sections.length} sections on ${event.data.date} for agency: ${event.data.agencyId} for reference: ${JSON.stringify(reference, null, 2)}`);
 
     // Chunk the sections into arrays of 50
     const chunkSize = 50;
@@ -230,25 +288,43 @@ export const processReference = inngest.createFunction(
     for (let i = 0; i < sections.length; i += chunkSize) {
       sectionChunks.push(sections.slice(i, i + chunkSize));
     }
-
     // Process each chunk in a separate step so the serverless function doesn't timeout
     for (const sectionChunk of sectionChunks) {
       await step.run('process-sections', async () => {
         for (const section of sectionChunk) {
-          const sectionId = `${section.title}.${section.identifier}`;
-          const content = await fetchSectionContent(logger, event.data.date, section);
+          const sectionId = `${event.data.reference.title}.${section.identifier}`;
+          const content = await retryWithBackoff(
+            () => fetchSectionContent(logger, event.data.reference.title, event.data.date, section),
+            logger
+          );
           const text = parseXMLText(content);
           await prisma.$transaction(async (tx) => {
             if (section.removed) {
-              await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, []);
+              await updateSectionHistory(
+                tx as PrismaClient,
+                logger,
+                event.data.date,
+                event.data.agencyId,
+                event.data.reference.title,
+                section,
+                [],
+              );
               if (!event.data.isCatchup && !event.data.isFirstCatchup) {
                 // We only have embeddings after the first catchup
                 await removeEmbeddings(tx as PrismaClient, logger, sectionId);
               }
               return;
             }
-            logger.info(`Fetched content for section ${section.identifier}`);
-            await updateSectionHistory(tx as PrismaClient, logger, event.data.date, event.data.agencyId, section, text);
+            logger.info(`Fetched content for § ${event.data.reference.title}.${event.data.reference.chapter}.${section.identifier}`);
+            await updateSectionHistory(
+              tx as PrismaClient,
+              logger,
+              event.data.date,
+              event.data.agencyId,
+              event.data.reference.title,
+              section,
+              text,
+            );
           });
           if (!event.data.isCatchup && !event.data.isFirstCatchup) {
             // We only have embeddings after the first catchup
@@ -285,6 +361,6 @@ export const processReference = inngest.createFunction(
         },
       });
     }
-    return { sections, date: event.data.date };
+    return { sections: sections.length, date: event.data.date };
   }
 );
