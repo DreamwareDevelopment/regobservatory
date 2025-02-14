@@ -77,7 +77,6 @@ const AgencyHistoryChart = () => {
       data.slice().reverse().forEach((item) => {
 
         const date = dayjs.utc(item.date);
-        console.log(date.format("YYYY-MM-DD"));
         let key: string;
 
         switch (timeFrame) {

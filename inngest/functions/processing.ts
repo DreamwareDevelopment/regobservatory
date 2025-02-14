@@ -4,6 +4,7 @@ import { CFRReference } from "@/lib/zod/agency";
 import dayjs from "@/lib/dayjs";
 import prisma from "@/lib/prisma";
 import { embedTexts } from "@/lib/ai";
+import { retryWithBackoff } from "@/lib/utils";
 import { Logger } from "inngest/middleware/logger";
 import { ParsedXMLTextArray } from "@/lib/zod/data";
 
@@ -121,75 +122,49 @@ async function updateHistory(
   return { current: currentHistory.wordCount, previous: previousHistory?.wordCount ?? 0 };
 }
 
-async function removeEmbeddings(logger: Logger, agencyId: string) {
+async function removeEmbeddings(logger: Logger, agencyId: string, agencyName: string) {
   // Remove the embeddings for the agency
-  logger.info(`Removing embeddings for agency ${agencyId}`);
   await prisma.agencyEmbedding.deleteMany({
     where: {
       agencyId,
     },
   });
-  logger.info(`Removed embeddings for agency ${agencyId}`);
+  logger.info(`Removed embeddings for ${agencyName}`);
 }
 
-async function insertEmbeddings(logger: Logger, agencyId: string, title: number, content: ParsedXMLTextArray) {
+async function insertEmbeddings(
+  logger: Logger,
+  agencyId: string,
+  agencyName: string,
+  date: string,
+  title: number,
+  content: ParsedXMLTextArray,
+) {
   // Insert embeddings for the agency content
   const chunks = content.flatMap(c => c.text.split('\n').map(t => ({ ...c, text: t })));
   const filteredChunks = chunks.filter(t => Boolean(t.text));
   if (!filteredChunks.length) {
-    logger.info(`No content to embed for agency ${agencyId}`);
+    logger.info(`No content to embed for ${agencyName}`);
     return;
   }
-  logger.info(`Generating ${filteredChunks.length} embeddings for agency ${agencyId}`);
-  const { embeddings, values } = await retryWithBackoff(async () => embedTexts(filteredChunks.map(c => c.text)), logger);
-  logger.info(`Inserting ${embeddings.length} embeddings for agency ${agencyId}`);
+  const { embeddings } = await retryWithBackoff(async () => embedTexts(filteredChunks.map(c => c.text)), logger);
   const promises = [];
   for (let i = 0; i < embeddings.length; i++) {
     const embedding = embeddings[i];
     const { identifier, type, text } = filteredChunks[i];
-    const value = values[i];
-    if (value !== text) {
-      throw new Error(`Value mismatch: ${value} !== ${text}`);
-    }
     // Ensure that agencyId, chunk, and embedding are not null
     if (agencyId && identifier && type && text && embedding) {
       const formattedEmbedding = `[${embedding.join(',')}]`;
       promises.push(prisma.$executeRaw`
-        INSERT INTO "agency_embeddings" ("id", "agency_id", "title", "identifier", "type", "text", "embedding", "created_at", "updated_at") 
-        VALUES (gen_random_uuid(), ${agencyId}, ${title}, ${identifier}, ${type}, ${text}, ${formattedEmbedding}, NOW(), NOW())
+        INSERT INTO "agency_embeddings" ("id", "agency_id", "title", "identifier", "type", "text", "embedding", "date", "created_at", "updated_at") 
+        VALUES (gen_random_uuid(), ${agencyId}, ${title}, ${identifier}, ${type}, ${text}, ${formattedEmbedding}, ${date}, NOW(), NOW())
       `);
     } else {
       logger.error(`Null value detected: agencyId=${agencyId}, identifier=${identifier}, type=${type}, text=${text}, embedding=${embedding?.slice(0, 10)}`);
     }
   }
   await Promise.all(promises);
-}
-
-async function retryWithBackoff<T>(
-  operation: () => Promise<T>,
-  logger: Logger,
-  maxAttempts: number = 20,
-  backoffFactor: number = 1000
-): Promise<T> {
-  let attempts = 0;
-
-  while (attempts < maxAttempts) {
-    try {
-      return await operation();
-    } catch (error) {
-      if (error instanceof Error && (error.message.includes('Rate limited') || error.message.includes('fetch failed') || error.message.includes('AI_RetryError'))) {
-        attempts++;
-        const baseWaitTime = backoffFactor * Math.pow(2, attempts);
-        const jitter = Math.random() * baseWaitTime;
-        const waitTime = baseWaitTime + jitter;
-        logger.warn(`Rate limited, reason: ${error.message}. Retrying in ${(waitTime / 1000).toFixed(2)} seconds...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      } else {
-        throw error;
-      }
-    }
-  }
-  throw new Error('Max retry attempts reached');
+  logger.info(`Inserted ${embeddings.length} embeddings for ${agencyName}`);
 }
 
 export const processReference = inngest.createFunction(
@@ -209,7 +184,7 @@ export const processReference = inngest.createFunction(
   },
   { event: InngestEvent.ProcessReference },
   async ({ event, logger, step }) => {
-    logger.info(`Processing reference: ${JSON.stringify(event.data.reference, null, 2)}`);
+    logger.info(`Processing reference for ${event.data.agencyName}: ${JSON.stringify(event.data.reference, null, 2)}`);
     const reference = event.data.reference;
     const xmlContent = await retryWithBackoff(
       () => fetchReferenceContent(logger, event.data.date, reference),
@@ -228,8 +203,8 @@ export const processReference = inngest.createFunction(
         text,
       );
       if (!event.data.isCatchup) {
-        await removeEmbeddings(logger, event.data.agencyId);
-        await insertEmbeddings(logger, event.data.agencyId, reference.title, text);
+        await removeEmbeddings(logger, event.data.agencyId, event.data.agencyName);
+        await insertEmbeddings(logger, event.data.agencyId, event.data.agencyName, event.data.date, reference.title, text);
       }
       return historicalCounts;
     });

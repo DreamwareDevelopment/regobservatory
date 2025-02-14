@@ -24,6 +24,9 @@ CREATE TABLE "agency_embeddings" (
 -- CreateIndex
 CREATE UNIQUE INDEX "agency_contents_agencyId_key" ON "agency_contents"("agencyId");
 
+-- CreateIndex
+CREATE INDEX ON "agency_embeddings" USING hnsw ("embedding" vector_cosine_ops);
+
 -- AddForeignKey
 ALTER TABLE "agency_contents" ADD CONSTRAINT "agency_contents_agencyId_fkey" FOREIGN KEY ("agencyId") REFERENCES "agencies"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 

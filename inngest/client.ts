@@ -28,6 +28,7 @@ export const inngest = new Inngest({
         reference: CFRReference;
         referenceHash: string;
         agencyId: string;
+        agencyName: string;
         parentId: string | null;
         isCatchup: boolean;
       };

@@ -74,6 +74,7 @@ export const ingest = inngest.createFunction(
           function: processReference,
           data: {
             date,
+            agencyName: agency.name,
             isCatchup: !applicationState.isCaughtUp,
             reference,
             referenceHash: hash,

@@ -58,3 +58,53 @@ export function parseXMLText(xmlData: string, logger: Logger): ParsedXMLTextArra
 
   return text;
 }
+
+export function convertXMLToHTML(xmlData: string): string {
+  let html = '';
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function processDivToHTML(div: any, identifier: string, type: string) {
+    const currentIdentifier = div.$?.N ?? identifier;
+    const currentType = div.$?.TYPE ?? type;
+
+    if (div.P) {
+      html += `<div class="${currentType}" id="${currentIdentifier}">`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      div.P.forEach((p: any) => {
+        const paragraphText = p._ || p.toString() || '';
+        if (paragraphText) {
+          html += `<p>${paragraphText}</p>`;
+        }
+      });
+      html += `</div>`;
+    }
+
+    Object.keys(div).forEach((key) => {
+      if (key.startsWith('DIV')) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        div[key].forEach((nestedDiv: any) => {
+          processDivToHTML(nestedDiv, currentIdentifier, currentType);
+        });
+      }
+    });
+  }
+
+  parseString(xmlData, (err, result) => {
+    if (err) {
+      console.error('Error parsing XML:', err);
+      return;
+    }
+
+    Object.keys(result).forEach((key) => {
+      if (key.startsWith('DIV')) {
+        const divs = Array.isArray(result[key]) ? result[key] : [result[key]];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        divs.forEach((div: any) => {
+          processDivToHTML(div, '', '');
+        });
+      }
+    });
+  });
+
+  return html;
+}

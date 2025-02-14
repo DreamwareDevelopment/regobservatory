@@ -64,6 +64,7 @@ model AgencyEmbedding {
   title      Int
   identifier String
   type       String
+  date       String
   embedding  Unsupported("vector(1536)")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
