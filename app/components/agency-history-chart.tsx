@@ -131,7 +131,7 @@ const AgencyHistoryChart = () => {
   return (
     <Card className="w-full max-w-3xl">
       <CardHeader>
-        <CardTitle>Agency Regulations Word Count</CardTitle>
+        <CardTitle>Federal Agency Regulations Word Count</CardTitle>
         <CardDescription>
           {selectedAgency
             ? "Word count for regulations over time for the selected agency"
