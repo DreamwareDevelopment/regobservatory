@@ -13,6 +13,7 @@ export async function retryWithBackoff<T>(
   backoffFactor: number = 1000
 ): Promise<T> {
   let attempts = 0;
+  const retryTimeRegex = /try again in (\d+\.\d+)s/;
 
   while (attempts < maxAttempts) {
     try {
@@ -20,9 +21,10 @@ export async function retryWithBackoff<T>(
     } catch (error) {
       if (error instanceof Error && (error.message.includes('Rate limit') || error.message.includes('fetch failed') || error.message.includes('AI_RetryError'))) {
         attempts++;
+        const retryTime = retryTimeRegex.exec(error.message)?.[1];
         const baseWaitTime = backoffFactor * Math.pow(2, attempts);
         const jitter = Math.random() * baseWaitTime;
-        const waitTime = baseWaitTime + jitter;
+        const waitTime = retryTime ? parseFloat(retryTime) * 1000 : baseWaitTime + jitter;
         (logger ?? console).warn(`Rate limited, reason: ${error.message}. Retrying in ${(waitTime / 1000).toFixed(2)} seconds...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       } else {
