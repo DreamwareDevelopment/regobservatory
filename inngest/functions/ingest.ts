@@ -81,10 +81,18 @@ export const ingest = inngest.createFunction(
             agencyId: agency.id,
             parentId: agency.parentId,
           },
+        }).catch(error => {
+          logger.error(`Failed to process reference ${hash} for agency ${agency.id}: ${error.message}`);
+          return null; // Return null to indicate failure
         }));
       }
     }
-    await Promise.all(promises);
+    const results = await Promise.all(promises);
+    const failedCount = results.filter(result => result === null).length;
+    const failureRate = failedCount / promises.length;
+    if (failureRate >= 0.1) {
+      throw new Error(`More than 10% of the promises failed: ${failedCount} out of ${promises.length}`);
+    }
     const lastProcessed = dayjs(date);
     const nextProcessingDate = lastProcessed.add(1, 'day').format('YYYY-MM-DD');
     await step.run('update-application-state', async () => {
