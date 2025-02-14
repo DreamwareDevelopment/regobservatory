@@ -45,6 +45,7 @@ This tool is for analyzing the size and scope of federal agency regulations loca
 The app is built with NextJS + React 18
 
 # Notable libraries:
+- pgvector
 - AI SDK
 - Dayjs
 - Recharts
