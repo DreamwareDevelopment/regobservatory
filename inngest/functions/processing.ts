@@ -1,11 +1,11 @@
 import { inngest, InngestEvent } from "../client";
 import { parseXMLText } from "@/lib/xml";
 import { CFRReference } from "@/lib/zod/agency";
-import { ParsedXMLTextArray, ParsedXMLTextArraySchema } from "@/lib/zod/data";
 import dayjs from "@/lib/dayjs";
 import prisma from "@/lib/prisma";
 import { embedTexts } from "@/lib/ai";
 import { Logger } from "inngest/middleware/logger";
+import { ParsedXMLTextArray } from "@/lib/zod/data";
 
 async function fetchReferenceContent(logger: Logger, date: string, reference: CFRReference) {
   const params = new URLSearchParams();
@@ -59,12 +59,6 @@ function countWords(logger: Logger, content: string) {
   return words ? words.length : 0;
 }
 
-function diffWordCount(logger: Logger, previousContent: string[], currentContent: string[]) {
-  const previousWordCount = previousContent.reduce((acc, content) => acc + countWords(logger, content), 0);
-  const currentWordCount = currentContent.reduce((acc, content) => acc + countWords(logger, content), 0);
-  return currentWordCount - previousWordCount;
-}
-
 async function updateHistory(
   logger: Logger,
   dateString: string,
@@ -105,26 +99,14 @@ async function updateHistory(
       },
     });
   }
-  // Then get the current stored agency content if any
-  const storedAgencyContent = await prisma.agencyContent.findUnique({
-    where: {
-      agencyId,
-    },
-  });
-  const storedContent = ParsedXMLTextArraySchema.parse(storedAgencyContent?.content ?? []);
-  // Then diff and add/remove the diffed word count to/from the current history entry
-  const wordCountDiff = diffWordCount(logger, storedContent.map(c => c.text), newContent.map(c => c.text));
-  currentHistory.wordCount += wordCountDiff;
+  // Update the word count for the current history entry
+  currentHistory.wordCount = countWords(logger, newContent.map(c => c.text).join(' '));
   await prisma.agencyHistory.update({
     where: { id: currentHistory.id },
     data: { wordCount: currentHistory.wordCount },
   });
   // Then save or delete the agency content
-  if (!newContent.length && storedAgencyContent) {
-    await prisma.agencyContent.delete({
-      where: { agencyId },
-    });
-  } else {
+  if (!newContent.length) {
     await prisma.agencyContent.upsert({
       where: { agencyId },
       update: {
