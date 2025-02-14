@@ -148,7 +148,7 @@ const AgencyHistoryChart = () => {
               <SelectValue placeholder="Select an agency" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Agencies</SelectItem>
+              <SelectItem value="all">All Agencies ({agencies.length})</SelectItem>
               {agencies.map((agency) => (
                 <SelectItem key={agency.id} value={agency.id}>
                   {agency.displayName}
