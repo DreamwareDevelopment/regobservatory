@@ -43,6 +43,11 @@ async function fetchReferenceContent(logger: Logger, date: string, reference: CF
     return null;
   }
 
+  if (response.status === 404) {
+    logger.error(`Reference on ${date} not found: ${JSON.stringify(reference, null, 2)}`);
+    return null;
+  }
+
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
