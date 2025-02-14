@@ -1,4 +1,4 @@
-import { Agency } from "@prisma/client";
+// import { Agency } from "@prisma/client";
 import { inngest, InngestEvent } from "../client";
 import { processReference } from "./processing";
 import prisma from "@/lib/prisma";
@@ -24,7 +24,6 @@ export const ingest = inngest.createFunction(
       if (!applicationState) {
         throw new Error("Application state not found");
       }
-      const agenciesToIngest: Agency[] = [];
       const agencies = await prisma.agency.findMany({
         include: {
           children: true,
@@ -33,20 +32,21 @@ export const ingest = inngest.createFunction(
           name: "asc",
         },
       });
-      // Temporarily sample a single department
-      for (const agency of agencies) {
-        if (agency.children.length > 0) {
-          const children = agency.children;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          delete (agency as any).children;
-          agenciesToIngest.push(agency);
-          for (const child of children) {
-            agenciesToIngest.push(child);
-          }
-          break;
-        }
-      }
-      return { agencies: agenciesToIngest, applicationState };
+      // // Temporarily sample a single department
+      // const agenciesToIngest: Agency[] = [];
+      // for (const agency of agencies) {
+      //   if (agency.children.length > 0) {
+      //     const children = agency.children;
+      //     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      //     delete (agency as any).children;
+      //     agenciesToIngest.push(agency);
+      //     for (const child of children) {
+      //       agenciesToIngest.push(child);
+      //     }
+      //     break;
+      //   }
+      // }
+      return { agencies, applicationState };
     });
     logger.info(`Found ${agencies.length} agencies`);
     /*
