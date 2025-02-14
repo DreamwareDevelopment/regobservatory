@@ -119,6 +119,15 @@ const AgencyHistoryChart = () => {
     }
   }
 
+  const formatYAxis = (value: number) => {
+    if (value >= 1_000_000) {
+      return `${(value / 1_000_000).toFixed(1)}M`
+    } else if (value >= 1_000) {
+      return `${(value / 1_000).toFixed(1)}K`
+    }
+    return value.toLocaleString()
+  }
+
   return (
     <Card className="w-full max-w-3xl">
       <CardHeader>
@@ -163,10 +172,10 @@ const AgencyHistoryChart = () => {
             <p className="text-muted-foreground">Loading...</p>
           </div>
         ) : chartData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={400}>
+          <ResponsiveContainer width="100%" height={400} className="">
             <BarChart data={chartData}>
               <XAxis dataKey="date" tickFormatter={formatXAxis} interval="preserveStartEnd" minTickGap={30} />
-              <YAxis tickFormatter={(value) => Math.round(value).toLocaleString()} width={80} />
+              <YAxis tickFormatter={formatYAxis} width={80} />
               <Bar
                 dataKey="wordCount"
                 fill="hsl(var(--primary))"
