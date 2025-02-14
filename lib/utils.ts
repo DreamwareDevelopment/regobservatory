@@ -18,7 +18,7 @@ export async function retryWithBackoff<T>(
     try {
       return await operation();
     } catch (error) {
-      if (error instanceof Error && (error.message.includes('Rate limited') || error.message.includes('fetch failed') || error.message.includes('AI_RetryError'))) {
+      if (error instanceof Error && (error.message.includes('Rate limit') || error.message.includes('fetch failed') || error.message.includes('AI_RetryError'))) {
         attempts++;
         const baseWaitTime = backoffFactor * Math.pow(2, attempts);
         const jitter = Math.random() * baseWaitTime;
