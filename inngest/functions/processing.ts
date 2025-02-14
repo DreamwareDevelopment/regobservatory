@@ -176,9 +176,9 @@ export const processReference = inngest.createFunction(
   {
     id: "process-reference",
     concurrency: [{
-      limit: 5,
+      limit: process.env.PROCESSING_CONCURRENCY_LIMIT ? parseInt(process.env.PROCESSING_CONCURRENCY_LIMIT) : 5,
       scope: "fn",
-      key: "event.data.date", // Only 10 references per date can be processed at a time
+      key: "event.data.date",
     }, {
       limit: 1,
       scope: "fn",
