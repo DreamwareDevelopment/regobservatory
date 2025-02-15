@@ -1,36 +1,52 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+This project is hosted at https://regobservatory.vercel.app
 
-## Getting Started
+# Purpose
 
-First, run the development server:
+This tool is for analyzing the size and scope of federal agency regulations located [here](https://ecfr.gov).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Features
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+1. Historical word count bar chart, optionally filterable by agency.
+2. Bubble plot showing the relative size of agencies with regard to their regulation word counts.
+3. Vector search of regulation text, optionally filterable by agency.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+# Architecture
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Ingest
 
-## Learn More
+- Data is ingested with the help of [Inngest](https://www.inngest.com/).
+  - Manual jobs may be triggered through their dashboard.
+- Ingest runs on Vercel serverless functions.
+- Data is stored on a managed postgres instance hosted by [Neon](https://neon.tech/home)
 
-To learn more about Next.js, take a look at the following resources:
+## Workflow
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Agencies are loaded in an idemptotent manual job load-agencies.
+2. Ingest is started via the ingest manual job.
+   - The ingest begins from the start date of eCFR data (2017-01-01).
+   - Ingest fetches the agencies then kicks off a job called process-reference for each agency.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Process Reference
 
-## Deploy on Vercel
+1. Fetch the xml for the agency as indicated by the reference.
+2. Parse the xml for paragraphs. Take note of the encapsulating sections.
+3. Get the word count and upsert the history.
+4. If the date being processed is the current date or RUN_UNTIL, generate and store embeddings.
+5. The ingest job will update the application state once process references is done for all agencies.
+6. If the date is less than the current date or RUN_UNTIL, the ingest job will kick off another iteration with the next day.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Cron Ingest
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Runs once a day.
+2. If the application state indicates ingest is caught up to the current date it will kick off the ingest job for the current date.
+
+# Frontend
+
+The app is built with NextJS + React 18
+
+# Notable libraries:
+- pgvector
+- AI SDK
+- Dayjs
+- Recharts
+- D3 JS
