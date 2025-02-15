@@ -123,15 +123,15 @@ const BubbleChart: React.FC = () => {
 
     const handleMouseMove = (event: MouseEvent) => {
       const rect = canvas.getBoundingClientRect()
-      const mouseX = event.clientX - rect.left
-      const mouseY = event.clientY - rect.top
+      const mouseX = (event.clientX - rect.left) * (canvas.width / rect.width)
+      const mouseY = (event.clientY - rect.top) * (canvas.height / rect.height)
 
       const hoveredNode = findHoveredNode(mouseX, mouseY)
 
       if (hoveredNode) {
         setTooltip({
-          x: mouseX - 50,
-          y: mouseY - 50,
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
           name: hoveredNode.data.name,
           wordCount: hoveredNode.data.wordCount,
           show: true,
