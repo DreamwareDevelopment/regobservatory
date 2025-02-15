@@ -183,9 +183,9 @@ const BubbleChart: React.FC = () => {
         <div
           className="absolute z-10 bg-background px-4 py-2 rounded-lg shadow-lg border border-border"
           style={{
-            left: Math.min(tooltip.x, window.innerWidth - 200),
-            top: Math.min(tooltip.y, window.innerHeight - 100),
-            transform: "translate(-100%, -100%)",
+            left: Math.max(0, Math.min(tooltip.x, window.innerWidth - 200)),
+            top: Math.max(0, Math.min(tooltip.y, window.innerHeight - 100)),
+            transform: "translate(0, -100%)",
             pointerEvents: "none",
           }}
         >
