@@ -132,7 +132,7 @@ export const ingestCron = inngest.createFunction(
     retries: 1,
   },
   {
-    cron: "0 19 * * 1-5", // 7:00 PM EST Monday through Friday
+    cron: "TZ=America/New_York 0 19 * * 1-5", // 7:00 PM EST Monday through Friday
   },
   async ({ logger, step }) => {
     const applicationState = await prisma.applicationState.findFirst();
