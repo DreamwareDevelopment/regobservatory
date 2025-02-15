@@ -80,7 +80,7 @@ const AgencySearch = () => {
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select an agency" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="max-w-[85vw]">
                 <SelectItem value="all">All Agencies ({agencies.length})</SelectItem>
                 {agencies.map((agency) => (
                   <SelectItem key={agency.id} value={agency.id}>
