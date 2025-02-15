@@ -40,6 +40,9 @@ const AgencySearch = () => {
   const handleSearch = async () => {
     setIsLoading(true)
     try {
+      if (!query) {
+        return;
+      }
       const url = new URL("/api/search", window.location.origin)
       url.searchParams.append("query", query)
       if (selectedAgency) {
