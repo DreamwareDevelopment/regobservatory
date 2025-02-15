@@ -91,7 +91,7 @@ const AgencySearch = () => {
             </Select>
             <button 
               onClick={handleSearch} 
-              className="bg-primary text-white px-4 py-2 rounded whitespace-nowrap"
+              className="bg-primary text-secondary px-4 py-2 rounded whitespace-nowrap"
             >
               Search
             </button>
