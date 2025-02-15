@@ -139,12 +139,12 @@ const AgencyHistoryChart = () => {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="flex space-x-4 mb-4">
+        <div className="flex flex-col sm:flex-row gap-4 mb-4">
           <Select
             value={selectedAgency || "all"}
             onValueChange={(value) => setSelectedAgency(value === "all" ? null : value)}
           >
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="Select an agency" />
             </SelectTrigger>
             <SelectContent>
@@ -157,7 +157,7 @@ const AgencyHistoryChart = () => {
             </SelectContent>
           </Select>
           <Select value={timeFrame} onValueChange={(value: TimeFrame) => setTimeFrame(value)}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-full sm:w-[200px]">
               <SelectValue placeholder="Select timeframe" />
             </SelectTrigger>
             <SelectContent>

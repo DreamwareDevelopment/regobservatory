@@ -33,6 +33,7 @@ const BubbleChart: React.FC = () => {
   })
   const transformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity)
   const nodesRef = useRef<d3.HierarchyCircularNode<Agency>[]>([])
+  const drawRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -75,22 +76,13 @@ const BubbleChart: React.FC = () => {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    const width = canvas.width
-    const height = canvas.height
-
-    const pack = d3.pack<Agency>().size([width, height]).padding(3)
-
-    const root = d3.hierarchy<Agency>({ children: data } as Agency).sum((d) => d.wordCount)
-
-    const nodes = pack(root).descendants().slice(1)
-    nodesRef.current = nodes
-
     const color = d3.scaleOrdinal(d3.schemeCategory10)
 
     const draw = () => {
-      ctx.clearRect(0, 0, width, height)
+      if (!canvas || !ctx) return
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      nodes.forEach((node) => {
+      nodesRef.current.forEach((node) => {
         ctx.beginPath()
         ctx.arc(node.x, node.y, node.r, 0, 2 * Math.PI)
         ctx.fillStyle = color(node.data.parentId || node.data.id)
@@ -108,8 +100,26 @@ const BubbleChart: React.FC = () => {
         }
       })
     }
+    
+    drawRef.current = draw
 
-    draw()
+    const resizeCanvas = () => {
+      const container = canvas.parentElement
+      if (!container) return
+      const width = Math.min(container.clientWidth, 800)
+      const height = Math.min(width * 0.75, 600)
+      canvas.width = width
+      canvas.height = height
+      
+      const pack = d3.pack<Agency>().size([width, height]).padding(3)
+      const root = d3.hierarchy<Agency>({ children: data } as Agency).sum((d) => d.wordCount)
+      nodesRef.current = pack(root).descendants().slice(1)
+      
+      if (drawRef.current) drawRef.current()
+    }
+
+    resizeCanvas()
+    window.addEventListener('resize', resizeCanvas)
 
     const handleMouseMove = (event: MouseEvent) => {
       const rect = canvas.getBoundingClientRect()
@@ -144,25 +154,31 @@ const BubbleChart: React.FC = () => {
       .on("zoom", (event) => {
         transformRef.current = event.transform
         ctx.save()
-        ctx.clearRect(0, 0, width, height)
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
         ctx.translate(event.transform.x, event.transform.y)
         ctx.scale(event.transform.k, event.transform.k)
-        draw()
+        if (drawRef.current) drawRef.current()
         ctx.restore()
       })
 
     d3.select(canvas).call(zoom)
 
     return () => {
+      window.removeEventListener('resize', resizeCanvas)
       canvas.removeEventListener("mousemove", handleMouseMove)
       canvas.removeEventListener("mouseleave", handleMouseLeave)
       d3.select(canvas).on(".zoom", null)
+      drawRef.current = null
     }
-  }, [data]) // Removed findHoveredNode from dependencies
+  }, [data])
 
   return (
-    <div className="h-full flex flex-col items-center relative bg-secondary">
-      <canvas ref={canvasRef} width={800} height={600} className="max-w-full max-h-full" />
+    <div className="w-full max-w-3xl flex flex-col items-center relative bg-secondary p-4 rounded-lg">
+      <canvas 
+        ref={canvasRef} 
+        className="w-full max-w-full touch-none" 
+        style={{ aspectRatio: '4/3' }}
+      />
       {tooltip.show && (
         <div
           className="absolute z-10 bg-background px-4 py-2 rounded-lg shadow-lg border border-border"

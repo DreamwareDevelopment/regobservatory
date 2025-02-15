@@ -64,7 +64,7 @@ const AgencySearch = () => {
         <CardTitle>Search Regulations</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="flex space-x-4 mb-4">
+        <div className="flex flex-col sm:flex-row gap-4 mb-4">
           <input
             type="text"
             value={query}
@@ -72,25 +72,30 @@ const AgencySearch = () => {
             placeholder="Enter search query"
             className="border p-2 rounded w-full"
           />
-          <Select
-            value={selectedAgency || "all"}
-            onValueChange={(value) => setSelectedAgency(value === "all" ? null : value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select an agency" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Agencies ({agencies.length})</SelectItem>
-              {agencies.map((agency) => (
-                <SelectItem key={agency.id} value={agency.id}>
-                  {agency.displayName}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <button onClick={handleSearch} className="bg-primary text-white p-2 rounded">
-            Search
-          </button>
+          <div className="flex gap-4 sm:flex-1">
+            <Select
+              value={selectedAgency || "all"}
+              onValueChange={(value) => setSelectedAgency(value === "all" ? null : value)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select an agency" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Agencies ({agencies.length})</SelectItem>
+                {agencies.map((agency) => (
+                  <SelectItem key={agency.id} value={agency.id}>
+                    {agency.displayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button 
+              onClick={handleSearch} 
+              className="bg-primary text-white px-4 py-2 rounded whitespace-nowrap"
+            >
+              Search
+            </button>
+          </div>
         </div>
         {isLoading ? (
           <p className="text-muted-foreground">Loading...</p>
